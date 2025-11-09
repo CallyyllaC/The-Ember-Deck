@@ -8,7 +8,114 @@ Things will vary between hardware used, I will not even try to pretend otherwise
 - Pi 5
 - USB DAC
 - Dead TV Radio (please don’t gut working ones; have some decency)
-- 4.5" Touchscreen
+- 4.3" Touchscreen
+
+## I/O Map Checklist
+Reference layout for controls, inputs, outputs, and hardware interfaces, documented for hardware assembly and software pin mapping.
+
+  ### Inputs
+  #### Analog Inputs:
+    - [ ] name: screen brightness potentiometer
+      description: Controls LCD backlight brightness
+      interface: ADC
+      channel: CH0
+      notes:
+
+    - [ ] name: visualiser gain potentiometer
+      description: Scales FFT amplitude for LED visualiser
+      interface: ADC
+      channel: CH1
+      notes:
+
+    - [ ] name: radio tuner
+      description: Sets color hue (static) or hue bias (dynamic)
+      interface: ADC
+      channel: CH2
+      notes: 0–360° hue map in static mode; ±60° bias in dynamic
+
+    - [ ] name: tv tuner
+      description: Sets color saturation/value (static) or contrast bias (dynamic)
+      interface: ADC
+      channel: CH3
+      notes: Smooth nonlinear response (use smoothstep mapping)
+
+  #### Digital Inputs:
+    - [ ] name: 3-way selector
+      description: TV / Neutral / Radio LED mode
+      pins: 
+      notes: Binary encoded (00/01/10); used to select what the 4 way selector affects
+
+    - [ ] name: 4-way selector
+      description: Visualiser mode selector
+      pins: 
+      notes: Binary encoded (00/01/10/11) for four visualiser modes
+
+    - [ ] name: tape buttons
+      description: Media control buttons repurposed from tape deck + Safe shutdown trigger
+      mapping:
+        play:    Play/Pause toggle
+        pause:   Stop playback
+        ff:      Next track
+        rew:     Previous track
+        eject:   Pi Power button
+        record:  Toggle color mode (Static / Dynamic)
+      pins:
+      notes: Software debounced
+
+  ### Outputs
+
+  #### Stepper Outputs:
+    - [ ] name: deck timer
+      description: Drives 3-digit analog timer (cosmetic)
+      driver:
+      pins:
+      notes: Not time-accurate
+
+  #### Analog Outputs:
+    - [ ] name: vu meter
+      description: Retro “battery” needle repurposed as hardware VU
+      driver: 
+      input source: Summed L+R audio line
+      notes: No Pi involvement; purely analog swing via op-amp rectifier
+	  
+
+  ### Hardware Only:
+    - [ ] name: fan speed 1
+      description: Analog potentiometer directly controls input fan driver circuit
+	  
+    - [ ] name: fan speed 2
+      description: Analog potentiometer directly controls output fan driver circuit
+	  
+    - [ ] name: volume
+      description: Potentiometer wired to amplifier board (hardware volume)
+	  
+    - [ ] name: tone
+      description: Potentiometer wired to amplifier board (bass boost)
+
+  ### USB Peripherals:
+    - [ ] name: led strip controller
+      description: USB-addressable LED strip (BlinkStick Pro)
+      connection: USB-A
+      notes: Controlled via Python HID or blinkstick library for real-time audio visualisation output
+
+    - [x] name: touchscreen display
+      description: 4.3" USB-C touchscreen for media control interface
+      connection: USB-A
+      notes: No GPIO used
+
+    - [ ] name: secondary_display
+      description: 5" USB-powered screen (non-touch)
+      connection: USB-A
+      notes: Used for visualiser
+
+    - [x] name: DAC
+      description: USB DAC for better audio quality
+      connection: USB-A
+      notes: Used for audio output to AMP and monitor connection
+
+    - [ ] name: powered usb hub
+      description: 12V input → 5V regulated hub supplying peripherals
+      notes: Provides stable current for LED strip, screens, and controllers
 
 ## Pi Software Setup
 
