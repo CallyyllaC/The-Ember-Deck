@@ -178,7 +178,7 @@ sudo umount /mnt/plexserver
 ## Preparing the hardware
 ## Hardware disassembly
 This is the part where you take something old apart and hope it forgives you, these will be about 40-50 years old, there will be things in here you dont want to breathe in and things that will disintergrate if you look at them too hard (looking at the rubber belts).
-![TV Radio](Images/TVRadio.jpg)
+![TV Radio](Images/TV Radio.jpg)
 Do not poke, prod, or “see what happens” with the CRT circuitry (or any unfamiliar circuitry really). Those capacitors can hold several tens of thousands of volts, even when unplugged. If you don’t know how to discharge them safely, leave it alone. There’s no fun in finding out the hard way.
 
 ##### Take More Photos Than You Think You Need
@@ -218,3 +218,15 @@ To finish, I gave the casing a quick blast of furniture polish for a bit of shin
 
 ## Software
 This is currently WIP
+### LED Strip audio visualiser
+#### Install prerequisits
+```bash
+sudo apt install libportaudio2 libportaudiocpp0 portaudio19-dev
+```
+```bash
+pip install numpy sounddevice
+```
+```bash
+python3 -m sounddevice
+```
+This should return a list of deivces
