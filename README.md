@@ -53,12 +53,12 @@ Reference layout for controls, inputs, outputs, and hardware interfaces, documen
 - [ ] name: tape buttons<br/>
       description: Media control buttons repurposed from tape deck + Safe shutdown trigger<br/>
       mapping:<br/>
-        - play:    Play/Pause toggle
-        - pause:   Stop playback
-        - ff:      Next track
-        - rew:     Previous track
-        - eject:   Pi Power button
-        - record:  Toggle color mode (Static / Dynamic)
+			- play:    Play/Pause toggle<br/>
+			- pause:   Stop playback<br/>
+			- ff:      Next track<br/>
+			- rew:     Previous track<br/>
+			- eject:   Pi Power button<br/>
+			- record:  Toggle color mode (Static / Dynamic)<br/>
       pins:<br/>
       notes: Software debounced
 
