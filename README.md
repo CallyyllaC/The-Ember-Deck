@@ -176,9 +176,11 @@ sudo umount /mnt/plexserver
 ```
 
 ## Preparing the hardware
-## Hardware disassembly
+### Hardware disassembly
 This is the part where you take something old apart and hope it forgives you, these will be about 40-50 years old, there will be things in here you dont want to breathe in and things that will disintergrate if you look at them too hard (looking at the rubber belts).
-![TV Radio](Images/TV Radio.jpg)
+
+![TV Radio](Images/TVRadio.jpg)
+
 Do not poke, prod, or “see what happens” with the CRT circuitry (or any unfamiliar circuitry really). Those capacitors can hold several tens of thousands of volts, even when unplugged. If you don’t know how to discharge them safely, leave it alone. There’s no fun in finding out the hard way.
 
 ##### Take More Photos Than You Think You Need
@@ -187,11 +189,13 @@ I didn’t take enough pictures during teardown, and it made reassembly a guessi
 
 #### Open the case and have a look at what youre working with
 The goal is to strip the donor unit down to what’s useful, cleanly and safely, without ruining your day with static discharge.
+
 ![TV Radio Internals](Images/OpenCase.jpg)
 
 #### Start stripping the modular boards
 Start by removing everything that’s not essential — old PCBs, speakers, knobs, tape decks, nostalgia. Desolder the components you plan to reuse, and get rid of the rest properly.
 Important: dispose of all electronics according to your local waste and recycling rules. I’m not responsible for anyone who decides to treat “hazardous materials” as a suggestion.
+
 ![Radio Tape Deck](Images/TapeDeck.jpg)
 
 #### Salvage the IO you can from these boards
@@ -200,6 +204,7 @@ If you’re keeping any of the original interface; knobs, dials, switches, slide
 Potentiometers can be reused for volume or lighting control with a bit of rewiring. Switches and toggle mechanisms can be adapted to trigger GPIO inputs. Even the old string-driven tuning assemblies can stay in place for aesthetic or functional value; just make sure they move freely and don’t bind after reassembly (Yes it took me way too long to reassemble the ones on mine, I didnt take enough photos).
 
 If you’re unsure what to keep, assume anything that clicks, turns, or resists you slightly might be worth saving.
+
 ![TV Radio Buttons](Images/FrontButtons.jpg)
 
 ##### When Things Break
@@ -213,7 +218,9 @@ If something snaps, burns, or crumbles, just make a note and move on. The goal i
 Once everything’s stripped, you’ll be left with what looks like the aftermath of an electrical fire in a scrapyard, it's time to clean it up.
 I will be honest here, the first thing I did was take it outside and blast what I could off with a hosepipe. Then I let it dry off (please note that I didnt hose down the metal parts only the plastic case). After it was dry I used some WD40 contact cleaner, a rag, a nylon brush and some elbow grease to get *most* of the crap off the inside and out.
 To finish, I gave the casing a quick blast of furniture polish for a bit of shine. It worked fine, but it doesn’t last long, proper plastic cleaner would’ve been smarter if I’d had any handy.
+
 ![TV Radio Case Top](Images/TopCase_Empty.jpg)
+
 ![TV Radio Case Bottom](Images/BottomCase_Empty.jpg)
 
 ## Software
