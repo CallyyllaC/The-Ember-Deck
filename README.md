@@ -15,106 +15,106 @@ Reference layout for controls, inputs, outputs, and hardware interfaces, documen
 
 ### Inputs
 #### Analog Inputs:
-- [ ] name: screen brightness potentiometer
-      description: Controls LCD backlight brightness
-      interface: ADC
-      channel: CH0
+- [ ] name: screen brightness potentiometer<br/>
+      description: Controls LCD backlight brightness<br/>
+      interface: ADC<br/>
+      channel: CH0<br/>
       notes:
 
-- [ ] name: visualiser gain potentiometer
-      description: Scales FFT amplitude for LED visualiser
-      interface: ADC
-      channel: CH1
+- [ ] name: visualiser gain potentiometer<br/>
+      description: Scales FFT amplitude for LED visualiser<br/>
+      interface: ADC<br/>
+      channel: CH1<br/>
       notes:
 
-- [ ] name: radio tuner
-      description: Sets color hue (static) or hue bias (dynamic)
-      interface: ADC
-      channel: CH2
+- [ ] name: radio tuner<br/>
+      description: Sets color hue (static) or hue bias (dynamic)<br/>
+      interface: ADC<br/>
+      channel: CH2<br/>
       notes: 0–360° hue map in static mode; ±60° bias in dynamic
 
-- [ ] name: tv tuner
-      description: Sets color saturation/value (static) or contrast bias (dynamic)
-      interface: ADC
-      channel: CH3
+- [ ] name: tv tuner<br/>
+      description: Sets color saturation/value (static) or contrast bias (dynamic)<br/>
+      interface: ADC<br/>
+      channel: CH3<br/>
       notes: Smooth nonlinear response (use smoothstep mapping)
 
 #### Digital Inputs:
-- [ ] name: 3-way selector
-      description: TV / Neutral / Radio LED mode
-      pins: 
+- [ ] name: 3-way selector<br/>
+      description: TV / Neutral / Radio LED mode<br/>
+      pins: <br/>
       notes: Binary encoded (00/01/10); used to select what the 4 way selector affects
 
-- [ ] name: 4-way selector
-      description: Visualiser mode selector
-      pins: 
+- [ ] name: 4-way selector<br/>
+      description: Visualiser mode selector<br/>
+      pins: <br/>
       notes: Binary encoded (00/01/10/11) for four visualiser modes
 
-- [ ] name: tape buttons
-      description: Media control buttons repurposed from tape deck + Safe shutdown trigger
-      mapping:
+- [ ] name: tape buttons<br/>
+      description: Media control buttons repurposed from tape deck + Safe shutdown trigger<br/>
+      mapping:<br/>
         - play:    Play/Pause toggle
         - pause:   Stop playback
         - ff:      Next track
         - rew:     Previous track
         - eject:   Pi Power button
         - record:  Toggle color mode (Static / Dynamic)
-      pins:
+      pins:<br/>
       notes: Software debounced
 
 ### Outputs
 
 #### Stepper Outputs:
-- [ ] name: deck timer
-      description: Drives 3-digit analog timer (cosmetic)
-      driver:
-      pins:
+- [ ] name: deck timer<br/>
+      description: Drives 3-digit analog timer (cosmetic)<br/>
+      driver:<br/>
+      pins:<br/>
       notes: Not time-accurate
 
 #### Analog Outputs:
-- [ ] name: vu meter
-      description: Retro “battery” needle repurposed as hardware VU
-      driver: 
-      input source: Summed L+R audio line
+- [ ] name: vu meter<br/>
+      description: Retro “battery” needle repurposed as hardware VU<br/>
+      driver: <br/>
+      input source: Summed L+R audio line<br/>
       notes: No Pi involvement; purely analog swing via op-amp rectifier
 	  
 
 ### Hardware Only:
-- [ ] name: fan speed 1
+- [ ] name: fan speed 1<br/>
       description: Analog potentiometer directly controls input fan driver circuit
 	  
-- [ ] name: fan speed 2
+- [ ] name: fan speed 2<br/>
       description: Analog potentiometer directly controls output fan driver circuit
 	  
-- [ ] name: volume
+- [ ] name: volume<br/>
       description: Potentiometer wired to amplifier board (hardware volume)
 	  
-- [ ] name: tone
+- [ ] name: tone<br/>
       description: Potentiometer wired to amplifier board (bass boost)
 
 ### USB Peripherals:
-- [ ] name: led strip controller
-      description: USB-addressable LED strip (BlinkStick Pro)
-      connection: USB-A
+- [ ] name: led strip controller<br/>
+      description: USB-addressable LED strip (BlinkStick Pro)<br/>
+      connection: USB-A<br/>
       notes: Controlled via Python HID or blinkstick library for real-time audio visualisation output
 
-- [x] name: touchscreen display
-      description: 4.3" USB-C touchscreen for media control interface
-      connection: USB-A
+- [x] name: touchscreen display<br/>
+      description: 4.3" USB-C touchscreen for media control interface<br/>
+      connection: USB-A<br/>
       notes: No GPIO used
 
-- [ ] name: secondary display
-      description: 5" USB-powered screen (non-touch)
-      connection: USB-A
+- [ ] name: secondary display<br/>
+      description: 5" USB-powered screen (non-touch)<br/>
+      connection: USB-A<br/>
       notes: Used for visualiser
 
-- [x] name: DAC
-      description: USB DAC for better audio quality
-      connection: USB-A
+- [x] name: DAC<br/>
+      description: USB DAC for better audio quality<br/>
+      connection: USB-A<br/>
       notes: Used for audio output to AMP and monitor connection
 
-- [ ] name: powered usb hub
-      description: 12V input → 5V regulated hub supplying peripherals
+- [ ] name: powered usb hub<br/>
+      description: 12V input → 5V regulated hub supplying peripherals<br/>
       notes: Provides stable current for LED strip, screens, and controllers
 
 ## Pi Software Setup
