@@ -1,0 +1,8 @@
+dynamicColour: true
+base_hue: 25
+saturation: 0.85
+value: 0.95
+alpha: 1.0
+scheme: analogous
+update_hz: 2.0
+album_timeout_s: 2.0

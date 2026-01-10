@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<map version="1.10" tiledversion="1.11.2" orientation="orthogonal" renderorder="right-down" width="80" height="60" tilewidth="8" tileheight="8" infinite="0" nextlayerid="4" nextobjectid="3">
+ <objectgroup id="2" name="scope.wave">
+  <object id="1" name="scope" x="0" y="48" width="640" height="336"/>
+ </objectgroup>
+ <objectgroup id="3" name="scope.lyrics">
+  <object id="2" name="lyrics" x="0" y="384" width="640" height="96"/>
+ </objectgroup>
+</map>

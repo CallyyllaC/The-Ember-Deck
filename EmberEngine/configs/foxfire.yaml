@@ -1,0 +1,13 @@
+proc_name: foxfire
+led_count: 40
+fps: 50
+mode_key: /leds/main/mode
+gain_key: /leds/main/gain
+brightness_key: /leds/main/brightness
+output_key: /leds/main/output_u8
+release: 0.99
+attack: 0.50
+decay: 0.999
+rise: 0.2
+epsilon: 1.0e-12
+gamma: 2.2

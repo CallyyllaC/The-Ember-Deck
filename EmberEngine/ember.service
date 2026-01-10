@@ -1,0 +1,1 @@
+ExecStart=/bin/bash -c 'cd ~/EmberDeck && source .venv/bin/activate && python3 src/FoundryCore.py'

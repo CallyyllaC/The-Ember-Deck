@@ -1,0 +1,8 @@
+proc_name: echocore
+sample_rate: 48000
+channels: 2
+smoothness: 1.0
+fps: 50
+fft_size: 4096
+bins: 4096
+device: default

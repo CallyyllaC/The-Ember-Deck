@@ -1,0 +1,112 @@
+{
+    "Map/SizeTest": {
+        "height": 4300,
+        "width": 2
+    },
+    "activeFile": "console.tmx",
+    "expandedProjectPaths": [
+        "EmberEngine/assets",
+        "EmberEngine/assets/overlays",
+        "EmberEngine",
+        "."
+    ],
+    "fileStates": {
+        "console.tmx": {
+            "expandedObjectLayers": [
+                4,
+                3,
+                5
+            ],
+            "scale": 2,
+            "selectedLayer": 0,
+            "viewCenter": {
+                "x": 368.5,
+                "y": 197
+            }
+        },
+        "global.tmx": {
+            "expandedObjectLayers": [
+                2,
+                4,
+                11,
+                8,
+                3,
+                10,
+                7,
+                6,
+                5,
+                13,
+                12,
+                9
+            ],
+            "scale": 2,
+            "selectedLayer": 12,
+            "viewCenter": {
+                "x": 410.5,
+                "y": 119.5
+            }
+        },
+        "info.tmx": {
+            "expandedObjectLayers": [
+                2,
+                4,
+                3,
+                5
+            ],
+            "scale": 2.513541666666667,
+            "selectedLayer": 1,
+            "viewCenter": {
+                "x": 341.3510153336096,
+                "y": 238.3091587235806
+            }
+        },
+        "now.tmx": {
+            "expandedObjectLayers": [
+                2,
+                4,
+                3,
+                5
+            ],
+            "scale": 2.513541666666667,
+            "selectedLayer": 3,
+            "viewCenter": {
+                "x": 319.86738499792784,
+                "y": 239.9005387484459
+            }
+        },
+        "scope.tmx": {
+            "expandedObjectLayers": [
+                2,
+                3
+            ],
+            "scale": 2.513541666666667,
+            "selectedLayer": 1,
+            "viewCenter": {
+                "x": 319.86738499792784,
+                "y": 284.06133443845835
+            }
+        }
+    },
+    "last.exportedFilePath": "H:/TheEmberDeck/The-Ember-Deck/EmberEngine/assets/overlays",
+    "map.height": 60,
+    "map.lastUsedExportFilter": "JSON map files (*.tmj *.json)",
+    "map.lastUsedFormat": "tmx",
+    "map.tileHeight": 8,
+    "map.tileWidth": 8,
+    "map.width": 80,
+    "openFiles": [
+        "global.tmx",
+        "scope.tmx",
+        "info.tmx",
+        "now.tmx",
+        "console.tmx"
+    ],
+    "project": "GUIConsole.tiled-project",
+    "recentFiles": [
+        "global.tmx",
+        "scope.tmx",
+        "info.tmx",
+        "now.tmx",
+        "console.tmx"
+    ]
+}

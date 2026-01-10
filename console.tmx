@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<map version="1.10" tiledversion="1.11.2" orientation="orthogonal" renderorder="right-down" width="80" height="60" tilewidth="8" tileheight="8" infinite="0" nextlayerid="6" nextobjectid="9">
+ <objectgroup id="3" name="console.diagnostics">
+  <object id="7" name="diagnostics" x="448" y="240" width="192" height="240"/>
+ </objectgroup>
+ <objectgroup id="4" name="console.heartbeats">
+  <object id="2" name="heartbeats" x="448" y="48" width="192" height="192"/>
+ </objectgroup>
+ <objectgroup id="5" name="console.logging">
+  <object id="8" name="logging" x="0" y="48" width="448" height="432"/>
+ </objectgroup>
+</map>
