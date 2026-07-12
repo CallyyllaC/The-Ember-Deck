@@ -1,0 +1,3 @@
+# Allow the Ember Deck user service to create its own virtual media keyboard.
+# This is deliberately limited to the uinput misc device.
+KERNEL=="uinput", MODE="0660", GROUP="[USERNAME]"

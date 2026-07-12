@@ -1,0 +1,22 @@
+# Owner of the one graphical guest-app slot on HDMI-2.
+# REC long-hold cycles PLEX -> RADIO -> YOUTUBE -> PLEX.
+proc_name: hdmi2_source_controller
+poll_hz: 10.0
+command_timeout_s: 4.0
+startup_settle_s: 1.0
+
+shortwave_app_id: de.haeckerfelix.Shortwave
+flatpak_path: flatpak
+
+# Installed by the media-app setup. ~ resolves to whichever user runs Foundry.
+pear_appimage: ~/apps/pear/Pear.AppImage
+pear_process_match: Pear.AppImage
+pear_args:
+  - --ozone-platform=wayland
+
+# Labwc maps each guest app to the HDMI-2 output, then fullscreens it. Verify
+# the connector name once with `wlr-randr`; wlroots normally calls it HDMI-A-2.
+labwc_rules_enabled: true
+labwc_rc_path: ~/.config/labwc/rc.xml
+labwc_hdmi2_output: HDMI-A-2
+labwc_path: labwc

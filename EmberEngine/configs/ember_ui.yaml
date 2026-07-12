@@ -1,0 +1,25 @@
+# Ember Deck Textual UI renderer.
+# Adaptive Textual-cell layout for the 800×480 Deck display, with a bezel-safe frame.
+# Physical navigation: source selector 1 enables page selection through the
+# four-way selector: 1 Now Playing, 2 Scope, 3 Track Info, 4 Console.
+proc_name: ember_ui
+logical_width: 80
+logical_height: 60
+# Keep all real content one terminal cell in from the physical case bezel.
+safe_margin_cells: 1
+# Scheduler speed only. Hidden pages remain throttled in ember_ui.py.
+update_hz: 50
+metadata_refresh_hz: 5
+metadata_dead_grace_s: 2.0
+art_dead_grace_s: 2.0
+# 50 Hz only while the physical selector has the Scope page open.
+scope_refresh_hz: 50
+system_refresh_s: 2.0
+log_refresh_s: 1.0
+# Horizontal marquee step for long Wi-Fi/IP values in the console diagnostics panel.
+diagnostics_scroll_step_s: 0.35
+log_path: logs/foundry.log
+structured_log_path: logs/foundry.structured.jsonl
+structured_log_required: true
+waveform_key: /audio/waveform
+waveform_samples: 160

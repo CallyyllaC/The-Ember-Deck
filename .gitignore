@@ -1,0 +1,40 @@
+# Python bytecode and tool caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Virtual environments and local environment variables
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+
+# Runtime logs, process files, and generated state
+*.log
+*.jsonl
+*.pid
+*.pid.lock
+logs/
+EmberEngine/configs/pawprint_state.yaml
+
+# Linux/editor temporary files
+*~
+*.swp
+*.swo
+.#*
+.directory
+.Trash-*/
+
+# Common cross-platform desktop metadata
+.DS_Store
+Thumbs.db
+desktop.ini
+

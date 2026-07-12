@@ -1,0 +1,4 @@
+# Optional explicit additions for configs/pawprint.yaml.
+# The supplied pawprint.py defaults to these values even if omitted.
+colour_output_max: 1.0
+saturation_output_max: 1.0

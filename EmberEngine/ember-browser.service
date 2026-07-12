@@ -1,0 +1,20 @@
+[Unit]
+Description=Ember Deck kiosk browser
+Requires=emberdeck.service
+After=emberdeck.service
+PartOf=emberdeck.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/EmberDeck
+Environment=MOZ_ENABLE_WAYLAND=1
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XDG_RUNTIME_DIR=%t
+ExecStart=%h/EmberDeck/run_ember_browser.sh
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=100
+KillMode=control-group
+
+[Install]
+WantedBy=default.target

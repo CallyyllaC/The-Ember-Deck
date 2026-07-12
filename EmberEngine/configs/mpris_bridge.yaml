@@ -1,0 +1,32 @@
+# Generic MPRIS bridge for the single local HDMI-2 app slot.
+# It deliberately publishes one normalised player record, not player-specific UI.
+proc_name: mpris_bridge
+poll_hz: 10.0
+refresh_s: 0.60
+playerctl_path: playerctl
+gdbus_path: gdbus
+command_timeout_s: 2.0
+metadata_buffer_bytes: 512
+unavailable_grace_s: 2.0
+
+# Shortwave is stable. Pear deliberately remains dynamic: while the HDMI-2
+# controller has selected YOUTUBE, the bridge tries these hints then accepts a
+# sole non-Shortwave MPRIS player.
+shortwave_players:
+  - de.haeckerfelix.Shortwave
+youtube_player_hints:
+  - youtube-music
+  - youtube music
+  - pear
+youtube_process_hints:
+  - Pear.AppImage
+  - pear
+  - youtube-music
+  - youtube music
+
+# The same small 48x48 real-art mosaic used by Ember UI for Plex.
+art_enabled: true
+art_width: 48
+art_height: 48
+art_timeout_s: 4.0
+art_max_bytes: 2000000

@@ -1,0 +1,13 @@
+# Will-o-Wisp hardware driver config
+# This process ONLY cares about power + channel.
+# LED count + FPS come from Foxfire via Synapse.
+
+proc_name: willo_wisp
+
+# Hardware / power settings
+pixel_max_ma: 50.0        # mA per pixel at full white (per WS2812/APA102 LED)
+usb_current_ma: 400.0     # safe USB current budget in mA (if not externally powered)
+external_power: true     # true if strip has its own PSU and is NOT drawing USB power
+
+# BlinkStick channel index (0..3 typically)
+data_channel: 0

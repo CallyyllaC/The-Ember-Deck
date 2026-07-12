@@ -1,8 +1,14 @@
+# Aurora owns colour policy. Pawprint controls are read live.
+# `value` and `alpha` are intentionally retired: brightness is the one master
+# LED brightness control, supplied by Pawprint.
+proc_name: aurora
 dynamicColour: true
-base_hue: 25
-saturation: 0.85
-value: 0.95
-alpha: 1.0
 scheme: analogous
-update_hz: 2.0
+static_base_saturation: 0.85
+fallback_hue: 0.0
+update_hz: 10.0
 album_timeout_s: 2.0
+
+# If Plex UltraBlur is absent, or a generic MPRIS app has artwork, Aurora
+# generates a four-corner palette from the published 48x48 album art.
+generated_palette_enabled: true

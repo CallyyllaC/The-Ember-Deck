@@ -1,0 +1,112 @@
+# Ember Deck physical I/O owner.
+# Pawprint owns GPIO + ADS1115 + HT16K33 and publishes /io/* shared-memory busses.
+proc_name: pawprint
+poll_hz: 50
+
+button_debounce_s: 0.05
+selector_debounce_s: 0.07
+i2c_retry_s: 2.0
+
+ads_address: 72       # 0x48
+matrix_address: 112   # 0x70
+ads_gain: 1
+pot_input_max_v: 3.30
+pot_smoothing: 0.18
+
+# The A0 colour pot currently delivers a small and non-linear raw span.
+# These endpoints map its observed usable 0.02..0.14 range to 0..1.
+# Tune only if the physical pot proves a different real end stop.
+colour_input_min: 0.0
+colour_input_max: 0.075
+colour_curve: 1.0
+colour_deadband: 0.003
+
+# Conservative semantic ceilings. The physical colour pot has a compressed,
+# non-linear response, so colour and saturation deliberately stop at 0.50.
+gain_output_max: 1.0
+brightness_output_max: 1.0
+colour_output_max: 1.0
+saturation_output_max: 1.0
+
+# A1 gain pot is expected to use the normal full span once its connector is repaired.
+gain_input_min: 0.36
+gain_input_max: 0.99
+gain_curve: 1.0
+gain_deadband: 0.003
+# A1 is currently unsafe/intermittent. Leave disabled until the pot is removed
+# or repaired; Pawprint will not create or read ADS1115 A1 while false.
+gain_enabled: true
+
+# A restored control must be picked up by a physical pot before that pot can
+# change it. This prevents booting into one value then immediately jumping to
+# wherever a knob happened to be parked.
+pickup_tolerance: 0.1
+
+# The four semantic values persist separately from this hardware config.
+default_control_value: 0.50
+state_path: pawprint_state.yaml
+state_save_interval_s: 30.0
+
+# HT16K33 graph/top-lamp brightness only. It is not the RGBW bar brightness.
+default_indicator_brightness: 0.55
+
+# The analogue needle owns live loudness. The 10 graph LEDs show the active
+# Plex/Bluetooth/generic-MPRIS track's progress, left-to-right. Pawprint owns this normally.
+# A future special effect can take the graph over only by setting
+# /io/out/led/graph_override = 1 with /io/out/led/graph_mask.
+graph_mode: progress
+graph_progress_segments: 10
+graph_progress_show_first_segment: true
+graph_external_override_enabled: true
+
+heartbeat_period_s: 1.60
+
+# Private tape-transport routing. Live Plex playback wins; then active AVRCP/
+# Bluetooth; then active generic MPRIS. When idle, a selected Radio/YouTube
+# HDMI-2 context routes the next physical command to MPRIS. Cold boot is Plex.
+media_source_refresh_s: 0.75
+media_command_timeout_s: 2.0
+minstrel_heartbeat_stale_s: 5.0
+bluetooth_media_enabled: true
+bluetoothctl_path: bluetoothctl
+gdbus_path: gdbus
+# Bluetooth status still refreshes at media_source_refresh_s for routing. Track
+# metadata is sampled separately to keep D-Bus subprocess churn modest.
+bluetooth_metadata_refresh_s: 1.0
+bluetooth_claim_metadata_enabled: true
+bluetooth_claim_threshold_s: 2.0
+bluetooth_claim_linger_s: 45.0
+bluetooth_claim_min_duration_ms: 30000
+
+# REC tap remains the two-bank pot-mode switch. Holding REC borrows the graph
+# LEDs, filling left-to-right, then requests PLEX -> RADIO -> YOUTUBE -> PLEX.
+record_source_hold_s: 3.0
+record_source_hold_confirm_s: 0.40
+
+event_capacity: 64
+
+# Pawprint-private top system-status lamps. These do not travel through the
+# public graph output bus.
+system_sample_interval_s: 0.50
+network_activity_min_bytes: 2048
+network_pulse_s: 0.14
+disk_activity_min_sectors: 8
+disk_pulse_s: 0.14
+storage_path: "/"
+storage_warning_min_free_gb: 2.0
+storage_warning_min_free_percent: 10.0
+memory_warning_min_available_percent: 10.0
+
+# Private tape transport. Pawprint creates a virtual Linux media-key device
+# through /dev/uinput; tape keys are intentionally not published onto /io.
+media_keys_enabled: true
+uinput_path: /dev/uinput
+media_key_device_name: Ember Deck Media Keys
+media_reconnect_s: 5.0
+
+# Eject has no short-press action. Hold it for five seconds for an orderly
+# system power-off. The front red LED flashes rapidly while the hold is armed.
+eject_shutdown_hold_s: 5.0
+shutdown_blink_hz: 4.0
+shutdown_enabled: true
+shutdown_helper: /usr/local/sbin/emberdeck-poweroff

@@ -1,13 +1,39 @@
 proc_name: foxfire
-led_count: 40
+led_count: 24
 fps: 50
+
+# Physical selector routing.
+# Pawprint publishes visualiser_mode_index as: 1->0, 2->1, 3->2, 4->3.
+# Foxfire applies that value only while the 3-way source selector is on Tape (3),
+# then keeps the last tape-selected animation running on other sources.
 mode_key: /leds/main/mode
-gain_key: /leds/main/gain
-brightness_key: /leds/main/brightness
-output_key: /leds/main/output_u8
+active_mode_key: /leds/main/active_mode
+active_mode_seq_key: /leds/main/active_mode_seq
+tape_mode_engaged_key: /leds/main/tape_mode_engaged
+source_selector_key: /io/in/selector/source_selector
+visualiser_mode_index_key: /io/in/selector/visualiser_mode_index
+tape_source_position: 3
+default_mode: 0  # Bounce until Tape has selected another animation
+
+gain_key: /io/in/control/gain
+frame_key: /leds/main/frame_rgba
+
+# Semantic gain map: 0.5 is the prior normal response.
+gain_floor: 0.08
+gain_mid: 1.00
+gain_ceiling: 2.00
+
 release: 0.99
-attack: 0.50
+attack: 0.90
 decay: 0.999
-rise: 0.2
-epsilon: 1.0e-12
+rise: 0.5
 gamma: 2.2
+fmin_hz: 10
+fmax_hz: null
+split_hz: 1500
+reducer_hi: pctl
+pctl_hi: 90
+pivot_hz: 1000
+tilt_power: 0.25
+tilt_cap: 3.0
+fast_mix: 0.25

@@ -1,0 +1,46 @@
+# whisper_daemon.yaml
+# Configuration for WhisperDaemon (EmberEngine Log System)
+
+# Name this process publishes under
+proc_name: whisper_daemon
+
+# Ambient scheduling. One deadline is selected after each ambient line.
+ambient_min_delay: 60.0
+ambient_max_delay: 150.0
+ambient_after_real_event_delay: 30.0
+ambient_after_startup_delay: 45.0
+ambient_queue_limit: 3
+
+# Repeated faults and delayed conversation chains.
+error_dedupe_cooldown_s: 60.0
+reaction_min_delay_s: 2.0
+reaction_max_delay_s: 8.0
+reaction_max_per_event: 2
+reaction_global_cooldown_s: 5.0
+reaction_process_cooldown_s: 15.0
+
+# Bounded UI event snapshot. This file is rewritten and never grows beyond the
+# configured number of records; it is not durable history.
+structured_log_path: logs/foundry.structured.jsonl
+ui_event_limit: 100
+
+# Durable history contains priority-0 errors only. Files rotate monthly, roll
+# over at the size ceiling, and are deleted after roughly six months.
+important_log_path: logs/foundry-errors.jsonl
+important_log_max_priority: 0
+important_log_max_bytes_mb: 10
+log_retention_days: 183
+log_cleanup_interval_s: 86400
+legacy_log_paths:
+  - logs/foundry.log
+  - logs/browser.log
+
+# UI persistence hints carried by RenderedMessage records.
+critical_visible_s: 12.0
+lifecycle_visible_s: 6.0
+interaction_visible_s: 4.0
+reaction_visible_s: 3.0
+ambient_visible_s: 0.0
+
+# FPS between log updates
+fps: 10

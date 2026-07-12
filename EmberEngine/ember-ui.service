@@ -1,0 +1,22 @@
+[Unit]
+Description=Ember Deck panel UI
+# The panel is an observer of the runtime and should share its lifecycle.
+Requires=emberdeck.service
+After=emberdeck.service graphical-session.target
+PartOf=emberdeck.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/EmberDeck
+Environment=PYTHONUNBUFFERED=1
+# The confirmed Labwc socket on this Pi. %t resolves to /run/user/<uid>.
+Environment=WAYLAND_DISPLAY=wayland-0
+ExecStartPre=/usr/bin/test -S %t/wayland-0
+ExecStart=%h/EmberDeck/launch_ember_ui.sh
+Restart=on-failure
+RestartSec=4
+TimeoutStopSec=10
+KillMode=control-group
+
+[Install]
+WantedBy=default.target

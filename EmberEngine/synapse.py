@@ -1,49 +1,69 @@
 """
-synapse.py
 Shared-memory helper using per-variable segments. No classes, minimal ceremony.
 
-- Each key (e.g., "/leds/main/mode") maps to one SharedMemory segment.
-- First write fixes the size; readers pass the expected length for arrays.
-- Handles are cached to avoid reopen/close every frame.
-- Arrays accept NumPy or Python lists. Writes use memoryview to avoid extra copies.
-- Optional double-stamp helpers for frame integrity (seq/seq2).
+Each key maps to one named SharedMemory segment. Handles are cached per process.
 
-Keys are normalized to small ASCII names internally:
-  "/leds/main/mode" -> "smem__/leds__main__mode"
+Python 3.13 note:
+SharedMemory gained a public ``track`` argument. Ember Deck deliberately keeps
+its named segments alive across worker restarts, so every process opens them
+with tracking disabled. This replaces the previous private resource_tracker
+unregister workaround, which can break on Python 3.13 when a fresh UI process
+opens an existing segment.
 """
 from multiprocessing import shared_memory
 import struct
+import sys
 import time
 from typing import Dict
+import numpy as _np
 
-# Optional NumPy support for faster array handling
 try:
-    import numpy as _np
-except Exception:  # numpy not required at import time
-    _np = None
+    from multiprocessing import resource_tracker as _rt  # fallback for pre-3.13
+except Exception:
+    _rt = None
 
-# Cache of opened SharedMemory handles so we don't thrash the kernel
 _HANDLE_CACHE: Dict[str, shared_memory.SharedMemory] = {}
 
 
 def _norm(name: str) -> str:
-    """Normalize a human path-like key to a SHM-safe, short name."""
+    """Return the norm result."""
     return ("smem__" + name.strip().replace(" ", "_").replace("/", "__"))[:254]
 
 
+def _open_untracked(norm: str, *, create: bool, size: int) -> shared_memory.SharedMemory:
+    """Open a segment without asking Python to auto-unlink Deck-owned memory."""
+    kwargs = {"name": norm, "create": create}
+    if create:
+        kwargs["size"] = size
+
+    # Python 3.13 provides ``track``. Use the public API whenever possible.
+    try:
+        return shared_memory.SharedMemory(**kwargs, track=False)
+    except TypeError:
+        # Older Python releases lack ``track``. Retain the old compatibility
+        # behaviour only there, never on the Python 3.13 path.
+        h = shared_memory.SharedMemory(**kwargs)
+        if _rt is not None:
+            try:
+                _rt.unregister(h._name, "shared_memory")
+            except Exception:
+                pass
+        return h
+
+
 def _get_handle(name: str, size: int, create: bool):
-    """
-    Return a cached handle; create if requested.
-    Note: size is only used on first creation; segments are not resized later.
-    """
+    """Return handle."""
     norm = _norm(name)
     h = _HANDLE_CACHE.get(norm)
     if h is not None:
         return h
+
     try:
-        h = shared_memory.SharedMemory(name=norm, create=create, size=size if create else 0)
+        h = _open_untracked(norm, create=create, size=size)
     except FileExistsError:
-        h = shared_memory.SharedMemory(name=norm, create=False)
+        # First writer may have already created it. Re-open without creation.
+        h = _open_untracked(norm, create=False, size=0)
+
     _HANDLE_CACHE[norm] = h
     return h
 
@@ -80,20 +100,22 @@ def set_float(name: str, value: float) -> None:
 
 
 # ---------- Arrays ----------
-def get_array(name: str, length: int, dtype: str = "f32"):
-    """
-    Read a fixed-length array as a Python list.
-    dtype: 'f32' (float32) or 'u8' (byte).
-    """
+def try_get_array(name: str, length: int, dtype: str = "f32"):
+    """Return a list, or None if the segment does not exist yet."""
     if dtype == "f32":
         item_size, fmt = 4, f"<{length}f"
     elif dtype == "u8":
         item_size, fmt = 1, None
+    elif dtype == "i32":
+        item_size, fmt = 4, f"<{length}i"
     else:
-        raise ValueError("dtype must be 'f32' or 'u8'")
+        raise ValueError("dtype must be 'f32', 'u8', or 'i32'")
 
     size = length * item_size
-    h = _get_handle(name, size, create=False)
+    try:
+        h = _get_handle(name, size, create=False)
+    except FileNotFoundError:
+        return None
 
     if dtype == "u8":
         return list(bytes(h.buf[:size]))
@@ -101,57 +123,39 @@ def get_array(name: str, length: int, dtype: str = "f32"):
 
 
 def set_array(name: str, values, dtype: str = "f32") -> None:
-    """
-    Write an array; first call fixes the segment size permanently.
-    Accepts lists or NumPy arrays. Uses memoryview to avoid extra packing copies.
-    """
+    """Write a fixed-size array; the first writer defines the segment size."""
     if dtype == "f32":
-        if _np is not None:
-            arr = _np.asarray(values, dtype=_np.float32)
-            payload = memoryview(arr).cast("B")
-            size = arr.nbytes
-        else:
-            vals = [float(v) for v in values]
-            payload = struct.pack(f"<{len(vals)}f", *vals)
-            size = len(vals) * 4
-
+        arr = _np.asarray(values, dtype=_np.float32)
     elif dtype == "u8":
-        if _np is not None:
-            arr = _np.asarray(values, dtype=_np.uint8)
-            payload = memoryview(arr).cast("B")
-            size = arr.nbytes
-        else:
-            vals = [int(max(0, min(255, v))) for v in values]
-            payload = bytes(vals)
-            size = len(vals)
+        arr = _np.asarray(values, dtype=_np.uint8)
+    elif dtype == "i32":
+        arr = _np.asarray(values, dtype=_np.int32)
     else:
-        raise ValueError("dtype must be 'f32' or 'u8'")
+        raise ValueError("dtype must be 'f32', 'u8', or 'i32'")
 
-    h = _get_handle(name, size, create=True)
-    h.buf[:size] = payload
+    payload = memoryview(arr).cast("B")
+    h = _get_handle(name, arr.nbytes, create=True)
+    h.buf[:arr.nbytes] = payload
 
 
 # ---------- Frame integrity ----------
-def begin_frame(seq_key="/frame/seq"):
-    """Increment and publish a sequence number at frame start (writer-side)."""
+def begin_frame(seq_key: str = "/frame/seq"):
+    """Increment and publish a sequence number at frame start."""
     s = (get_int(seq_key, 0) + 1) & 0x7FFFFFFF
     set_int(seq_key, s)
     return s
 
 
-def end_frame(seq2_key="/frame/seq2", value: int = None):
-    """Publish matching end-of-frame sequence number (writer-side)."""
+def end_frame(seq2_key: str = "/frame/seq2", value: int | None = None):
+    """Publish a matching end-of-frame sequence number."""
     if value is None:
         value = (get_int(seq2_key, 0) + 1) & 0x7FFFFFFF
     set_int(seq2_key, value)
     return value
 
 
-def wait_consistent(seq_key="/frame/seq", seq2_key="/frame/seq2", spins=1000, sleep_s=0.0004):
-    """
-    Reader-side: spin until seq and seq2 match, indicating a completed frame.
-    Returns the stable sequence or last seen value after spins.
-    """
+def wait_consistent(seq_key: str = "/frame/seq", seq2_key: str = "/frame/seq2", spins: int = 1000, sleep_s: float = 0.0004):
+    """Read until matching frame stamps are observed, or return the last one."""
     for _ in range(spins):
         a = get_int(seq_key, 0)
         b = get_int(seq2_key, 0)
@@ -161,8 +165,8 @@ def wait_consistent(seq_key="/frame/seq", seq2_key="/frame/seq2", spins=1000, sl
     return get_int(seq_key, 0)
 
 
-def close_all():
-    """Close all cached SharedMemory handles. Call on process shutdown."""
+def close_all() -> None:
+    """Close cached descriptors. Deliberately does not unlink named segments."""
     for h in list(_HANDLE_CACHE.values()):
         try:
             h.close()

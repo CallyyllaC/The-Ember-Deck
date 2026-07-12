@@ -1,8 +1,4 @@
-proc_name: echocore
-sample_rate: 48000
-channels: 2
-smoothness: 1.0
-fps: 50
-fft_size: 4096
-bins: 4096
-device: default
+# Add these two lines to the existing Echo config. The rest of your audio
+# capture configuration stays exactly as it is.
+waveform_samples: 160
+waveform_key: /audio/waveform

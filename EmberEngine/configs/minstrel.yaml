@@ -1,0 +1,9 @@
+proc_name: minstrel
+server_name: [YOUR_PLEX_SERVER]
+username: [YOUR_USERNAME]
+password: [YOUR_PASSWORD]
+url: https://[YOUR_PLEX_URL].plex.direct:32400
+poll_interval_s: 1
+lyrics_update_interval_s: 0.25
+clock_resync_threshold_s: 7.0
+token: 
