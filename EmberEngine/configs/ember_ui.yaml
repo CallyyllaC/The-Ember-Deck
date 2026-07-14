@@ -10,6 +10,10 @@ safe_margin_cells: 1
 # Scheduler speed only. Hidden pages remain throttled in ember_ui.py.
 update_hz: 50
 metadata_refresh_hz: 5
+# Colour-only response to the physical brightness control. This leaves the
+# monitor backlight and album artwork untouched while keeping text readable.
+ui_brightness_floor: 0.52
+ui_brightness_ceiling: 1.0
 metadata_dead_grace_s: 2.0
 art_dead_grace_s: 2.0
 # 50 Hz only while the physical selector has the Scope page open.

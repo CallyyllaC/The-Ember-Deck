@@ -61,6 +61,10 @@ DEFAULTS = {
     "info_refresh_hz": 1.0,
     "console_refresh_hz": 2.0,
     "palette_refresh_hz": 2.0,
+    # The physical brightness control also breathes the UI chrome, within a
+    # deliberately narrow range. It never changes the monitor backlight.
+    "ui_brightness_floor": 0.52,
+    "ui_brightness_ceiling": 1.0,
     "system_refresh_s": 4.0,
     "log_refresh_s": 1.0,
     "log_path": "logs/foundry.log",
@@ -318,14 +322,14 @@ def lyric_context_widget(context: Tuple[str, str, str], width: int, height: int)
     show_heading = int(height) >= 6
     rendered = Text()
     if show_heading:
-        rendered.append("LYRICS\n", style="bold #b9a78c")
+        rendered.append("LYRICS\n", style="bold #d47a3a")
 
     previous_text = truncate_terminal_cells(previous, usable_width) or " "
     current_text = truncate_terminal_cells(current, usable_width) or "—"
     next_text = truncate_terminal_cells(next_line, usable_width) or " "
-    rendered.append(previous_text + "\n", style="#77706a")
-    rendered.append(current_text + "\n", style="bold #f0e4d0")
-    rendered.append(next_text, style="#77706a")
+    rendered.append(previous_text + "\n", style="#76534b")
+    rendered.append(current_text + "\n", style="bold #f2c994")
+    rendered.append(next_text, style="#76534b")
     return rendered
 
 
@@ -782,7 +786,7 @@ class ScopeWidget(Widget):
     """Ember CRT: ivory live trace with a genuinely visible palette halo."""
 
     DEFAULT_CSS = """
-    ScopeWidget { overflow: hidden hidden; background: #050301; }
+    ScopeWidget { overflow: hidden hidden; background: #0b0305; }
     """
 
     def __init__(self, **kwargs) -> None:
@@ -955,7 +959,7 @@ class AlbumArtWidget(Widget):
     """
 
     DEFAULT_CSS = """
-    AlbumArtWidget { overflow: hidden hidden; background: #080808; }
+    AlbumArtWidget { overflow: hidden hidden; background: #0d0506; }
     """
 
     def __init__(self, **kwargs) -> None:
@@ -1028,8 +1032,8 @@ class EmberUI(App[None]):
     /* Textual positions absolute widgets with `offset`, not web-CSS left/top.
        Actual rectangles are calculated from the live terminal viewport. */
     Screen {
-        background: #000000;
-        color: #e8e8e8;
+        background: #090204;
+        color: #e8c9a4;
         overflow: hidden hidden;
         layers: frame pages overlay;
     }
@@ -1038,25 +1042,25 @@ class EmberUI(App[None]):
         overflow: hidden hidden;
         padding: 0 1;
     }
-    .panel { border: round #444444; background: #070707; }
+    .panel { border: round #6e2d20; background: #120607; }
     #safe-frame {
         position: absolute;
         offset: 0 0;
         width: 80;
         height: 60;
-        border: round #303030;
+        border: round #4b1d19;
         background: transparent;
         layer: frame;
     }
-    .micro { color: #888888; }
-    .label { color: #9d9d9d; }
+    .micro { color: #8f5f50; }
+    .label { color: #bd7752; }
     #global-root {
         position: absolute;
         offset: 0 0;
         width: 80;
         height: 6;
-        background: #030303;
-        border-bottom: solid #444444;
+        background: #170708;
+        border-bottom: solid #87351f;
         layer: overlay;
     }
     #page-now, #page-scope, #page-info, #page-console {
@@ -1087,6 +1091,7 @@ class EmberUI(App[None]):
         self._last_palette_at = 0.0
         self._last_lyrics_at = 0.0
         self._last_art_at = 0.0
+        self._ui_chrome_level = -1.0
         self.system = {"volume": "N/A", "wifi": "N/A", "ip": "N/A", "cpu": 0, "ram": "N/A", "temp": "N/A"}
         self.system_probe = SystemProbe()
         self.live_source = SOURCE_PLEX
@@ -1156,6 +1161,42 @@ class EmberUI(App[None]):
         interval = 1.0 / max(2, int(self.cfg.get("update_hz", 20)))
         self.set_interval(interval, self.refresh_frame)
         self.refresh_frame()
+
+    @staticmethod
+    def _scaled_colour(rgb: Tuple[int, int, int], amount: float) -> str:
+        """Return a brightness-scaled CSS colour without changing its hue."""
+        amount = max(0.0, float(amount))
+        channels = tuple(max(0, min(255, int(round(channel * amount)))) for channel in rgb)
+        return f"rgb({channels[0]},{channels[1]},{channels[2]})"
+
+    def _apply_ui_brightness(self) -> None:
+        """Let the brightness control gently drive the instrument chrome."""
+        control = clamp01(bus.get_float("/io/in/control/brightness", 0.7))
+        floor = clamp01(float(self.cfg.get("ui_brightness_floor", 0.52)))
+        ceiling = max(floor, float(self.cfg.get("ui_brightness_ceiling", 1.0)))
+        level = floor + (ceiling - floor) * control
+        if abs(level - self._ui_chrome_level) < 0.015:
+            return
+        self._ui_chrome_level = level
+
+        # Backgrounds move less than text and copperwork: even at minimum the
+        # panel remains a burgundy object instead of collapsing into black.
+        surface_level = 0.72 + level * 0.28
+        screen_level = 0.78 + level * 0.22
+        self.screen.styles.background = self._scaled_colour((9, 2, 4), screen_level)
+        self.screen.styles.color = self._scaled_colour((232, 201, 164), level)
+
+        panel_colour = self._scaled_colour((18, 6, 7), surface_level)
+        border_colour = self._scaled_colour((110, 45, 32), level)
+        for panel in self.query(".panel"):
+            panel.styles.background = panel_colour
+            panel.styles.border = ("round", border_colour)
+
+        safe_frame = self.query_one("#safe-frame")
+        safe_frame.styles.border = ("round", self._scaled_colour((75, 29, 25), level))
+        global_root = self.query_one("#global-root")
+        global_root.styles.background = self._scaled_colour((23, 7, 8), surface_level)
+        global_root.styles.border_bottom = ("solid", self._scaled_colour((135, 53, 31), level))
 
     def _place(self, widget_id: str, region: Region) -> None:
         """Place a widget in one hard-coded Textual-cell rectangle.
@@ -1514,6 +1555,7 @@ class EmberUI(App[None]):
         now = time.monotonic()
         self._update_page_from_selectors()
         self._refresh_live_state(now)
+        self._apply_ui_brightness()
 
         if self._due(now, self._last_global_at, self.cfg.get("global_refresh_hz", 4.0)):
             self._last_global_at = now
