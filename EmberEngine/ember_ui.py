@@ -1091,7 +1091,7 @@ class EmberUI(App[None]):
         self._last_palette_at = 0.0
         self._last_lyrics_at = 0.0
         self._last_art_at = 0.0
-        self._ui_chrome_level = -1.0
+        self._ui_chrome_signature: Optional[Tuple[int, Tuple[int, int, int]]] = None
         self.system = {"volume": "N/A", "wifi": "N/A", "ip": "N/A", "cpu": 0, "ram": "N/A", "temp": "N/A"}
         self.system_probe = SystemProbe()
         self.live_source = SOURCE_PLEX
@@ -1169,34 +1169,71 @@ class EmberUI(App[None]):
         channels = tuple(max(0, min(255, int(round(channel * amount)))) for channel in rgb)
         return f"rgb({channels[0]},{channels[1]},{channels[2]})"
 
+    @staticmethod
+    def _mix_colour(
+        first: Tuple[int, int, int],
+        second: Tuple[int, int, int],
+        second_weight: float,
+    ) -> Tuple[int, int, int]:
+        """Blend two RGB colours while retaining exact, predictable output."""
+        weight = clamp01(second_weight)
+        return tuple(
+            int(round(left * (1.0 - weight) + right * weight))
+            for left, right in zip(first, second)
+        )
+
+    @staticmethod
+    def _palette_accent(colours: Sequence[Tuple[int, int, int]]) -> Tuple[int, int, int]:
+        """Choose and lift the palette colour that best expresses its hue."""
+        candidates = list(colours) or [(180, 76, 34)]
+        accent = max(candidates, key=lambda rgb: (max(rgb) - min(rgb)) + max(rgb) * 0.12)
+        if max(accent) - min(accent) < 16:
+            return (180, 76, 34)
+        peak = max(accent)
+        if peak < 150:
+            scale = 150.0 / max(1, peak)
+            accent = tuple(min(255, int(round(channel * scale))) for channel in accent)
+        return accent
+
     def _apply_ui_brightness(self) -> None:
         """Let the brightness control gently drive the instrument chrome."""
         control = clamp01(bus.get_float("/io/in/control/brightness", 0.7))
         floor = clamp01(float(self.cfg.get("ui_brightness_floor", 0.52)))
         ceiling = max(floor, float(self.cfg.get("ui_brightness_ceiling", 1.0)))
         level = floor + (ceiling - floor) * control
-        if abs(level - self._ui_chrome_level) < 0.015:
+        accent = self._palette_accent(self.live_colours)
+        signature = (int(round(level * 64)), accent)
+        if signature == self._ui_chrome_signature:
             return
-        self._ui_chrome_level = level
+        self._ui_chrome_signature = signature
 
-        # Backgrounds move less than text and copperwork: even at minimum the
-        # panel remains a burgundy object instead of collapsing into black.
+        # Aurora supplies the hue. The fixed ember colours now describe only
+        # the material: subtly tinted soot surfaces and warmer readable type.
+        # Backgrounds move less than text and metalwork so they never collapse.
         surface_level = 0.72 + level * 0.28
         screen_level = 0.78 + level * 0.22
-        self.screen.styles.background = self._scaled_colour((9, 2, 4), screen_level)
-        self.screen.styles.color = self._scaled_colour((232, 201, 164), level)
+        screen_rgb = self._mix_colour((7, 3, 4), accent, 0.07)
+        panel_rgb = self._mix_colour((13, 7, 7), accent, 0.13)
+        header_rgb = self._mix_colour((16, 8, 8), accent, 0.18)
+        border_rgb = self._mix_colour((125, 57, 32), accent, 0.72)
+        text_rgb = self._mix_colour((236, 210, 174), accent, 0.10)
 
-        panel_colour = self._scaled_colour((18, 6, 7), surface_level)
-        border_colour = self._scaled_colour((110, 45, 32), level)
+        self.screen.styles.background = self._scaled_colour(screen_rgb, screen_level)
+        self.screen.styles.color = self._scaled_colour(text_rgb, level)
+
+        panel_colour = self._scaled_colour(panel_rgb, surface_level)
+        border_colour = self._scaled_colour(border_rgb, level)
         for panel in self.query(".panel"):
             panel.styles.background = panel_colour
             panel.styles.border = ("round", border_colour)
 
         safe_frame = self.query_one("#safe-frame")
-        safe_frame.styles.border = ("round", self._scaled_colour((75, 29, 25), level))
+        safe_frame.styles.border = (
+            "round", self._scaled_colour(self._mix_colour((65, 31, 25), accent, 0.45), level)
+        )
         global_root = self.query_one("#global-root")
-        global_root.styles.background = self._scaled_colour((23, 7, 8), surface_level)
-        global_root.styles.border_bottom = ("solid", self._scaled_colour((135, 53, 31), level))
+        global_root.styles.background = self._scaled_colour(header_rgb, surface_level)
+        global_root.styles.border_bottom = ("solid", border_colour)
 
     def _place(self, widget_id: str, region: Region) -> None:
         """Place a widget in one hard-coded Textual-cell rectangle.
