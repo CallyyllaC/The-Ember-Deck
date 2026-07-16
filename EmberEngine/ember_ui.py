@@ -1213,10 +1213,10 @@ class EmberUI(App[None]):
         surface_level = 0.72 + level * 0.28
         screen_level = 0.78 + level * 0.22
         screen_rgb = self._mix_colour((7, 3, 4), accent, 0.07)
-        panel_rgb = self._mix_colour((13, 7, 7), accent, 0.13)
-        header_rgb = self._mix_colour((16, 8, 8), accent, 0.18)
-        border_rgb = self._mix_colour((125, 57, 32), accent, 0.72)
-        text_rgb = self._mix_colour((236, 210, 174), accent, 0.10)
+        panel_rgb = self._mix_colour((13, 7, 7), accent, 0.07)
+        header_rgb = self._mix_colour((16, 8, 8), accent, 0.10)
+        border_rgb = self._mix_colour((125, 57, 32), accent, 0.44)
+        text_rgb = self._mix_colour((236, 210, 174), accent, 0.04)
 
         self.screen.styles.background = self._scaled_colour(screen_rgb, screen_level)
         self.screen.styles.color = self._scaled_colour(text_rgb, level)
@@ -1229,7 +1229,7 @@ class EmberUI(App[None]):
 
         safe_frame = self.query_one("#safe-frame")
         safe_frame.styles.border = (
-            "round", self._scaled_colour(self._mix_colour((65, 31, 25), accent, 0.45), level)
+            "round", self._scaled_colour(self._mix_colour((65, 31, 25), accent, 0.28), level)
         )
         global_root = self.query_one("#global-root")
         global_root.styles.background = self._scaled_colour(header_rgb, surface_level)

@@ -5,6 +5,9 @@ proc_name: aurora
 dynamicColour: true
 scheme: analogous
 static_base_saturation: 0.85
+# UI colour is intentionally calmer than the RGBW visualiser. A saturation
+# control near 0.9 therefore gives the display roughly a 0.4-equivalent tint.
+ui_saturation_scale: 0.45
 fallback_hue: 0.0
 update_hz: 10.0
 album_timeout_s: 2.0

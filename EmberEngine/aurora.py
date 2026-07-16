@@ -62,6 +62,10 @@ DEFAULTS = dict(
     dynamicColour=True,
     scheme="analogous",
     static_base_saturation=0.85,
+    # The display is tinted instrument glass, not another LED emitter. At a
+    # vivid 0.9 control setting this makes the UI resemble the LED palette at
+    # roughly 0.4, while retaining the same hue and palette relationships.
+    ui_saturation_scale=0.45,
     fallback_hue=0.0,
     update_hz=10.0,
     album_timeout_s=2.0,
@@ -252,9 +256,10 @@ def transform_dynamic(
     source: Sequence[Tuple[float, float, float]],
     saturation_control: float,
     brightness_control: float,
+    saturation_scale: float = 1.0,
 ) -> List[Tuple[float, float, float]]:
     """Return the transform dynamic result."""
-    factor = saturation_factor(saturation_control)
+    factor = saturation_factor(saturation_control) * max(0.0, float(saturation_scale))
     brightness = clamp01(brightness_control)
     transformed = []
     for red, green, blue in source:
@@ -269,10 +274,13 @@ def static_palette(
     saturation_control: float,
     brightness_control: float,
     cfg: dict,
+    saturation_scale: float = 1.0,
 ) -> List[Tuple[float, float, float]]:
     """Return the static palette result."""
     base_sat = finite01(cfg.get("static_base_saturation"), 0.85)
-    saturation = clamp01(base_sat * saturation_factor(saturation_control))
+    saturation = clamp01(
+        base_sat * saturation_factor(saturation_control) * max(0.0, float(saturation_scale))
+    )
     rgb = synthesize_palette(clamp01(hue_control) * 360.0, saturation, str(cfg.get("scheme", "analogous")))
     brightness = clamp01(brightness_control)
     return [(r * brightness, g * brightness, b * brightness) for r, g, b in rgb]
@@ -365,15 +373,17 @@ def main() -> None:
             )
 
             if cached_album_is_fresh:
+                ui_saturation_scale = max(0.0, float(cfg.get("ui_saturation_scale", 0.45)))
                 publish_theme(
                     transform_dynamic(last_album_raw, saturation, brightness),
-                    transform_dynamic(last_album_raw, saturation, 1.0),
+                    transform_dynamic(last_album_raw, saturation, 1.0, ui_saturation_scale),
                     True,
                 )
             else:
+                ui_saturation_scale = max(0.0, float(cfg.get("ui_saturation_scale", 0.45)))
                 publish_theme(
                     static_palette(hue, saturation, brightness, cfg),
-                    static_palette(hue, saturation, 1.0, cfg),
+                    static_palette(hue, saturation, 1.0, cfg, ui_saturation_scale),
                     False,
                 )
 
