@@ -12,6 +12,6 @@ fallback_hue: 0.0
 update_hz: 10.0
 album_timeout_s: 2.0
 
-# If Plex UltraBlur is absent, or a generic MPRIS app has artwork, Aurora
-# generates a four-corner palette from the published 48x48 album art.
+# Aurora extracts dominant, accent, dark and light colours from the published
+# 48x48 Plex or MPRIS artwork. Plex UltraBlur remains the artwork fallback.
 generated_palette_enabled: true

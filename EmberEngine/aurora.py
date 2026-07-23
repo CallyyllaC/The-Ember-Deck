@@ -5,8 +5,8 @@ aurora.py
 Ember Deck colour-policy owner.
 
 Aurora produces the four-colour palette used by Foxfire. It chooses either:
-  * dynamic Plex artwork colours, but only while Plex is the active source; or
-  * a manual static hue palette for Bluetooth, local/system, and fallback use.
+  * semantic artwork colours for active Plex and local/system media; or
+  * a manual static hue palette for Bluetooth and fallback use.
 
 Pawprint semantic controls:
   /io/in/control/brightness  master strip brightness, 0..1
@@ -21,11 +21,12 @@ import os
 import signal
 import time
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import yaml
 
 import synapse as bus
+from artwork_palette import extract_palette
 from whisper_daemon import log_heartbeat, log_info
 
 MEDIA_SOURCE_PLEX = 1
@@ -158,89 +159,53 @@ def read_album_rgb() -> Optional[List[Tuple[float, float, float]]]:
 ART_BUS_WIDTH = 48
 ART_BUS_HEIGHT = 48
 ART_BUS_BYTES = ART_BUS_WIDTH * ART_BUS_HEIGHT * 3
+Palette = List[Tuple[float, float, float]]
+PaletteCacheEntry = Tuple[Tuple[int, int, int], Optional[Palette]]
+_generated_palette_cache: Dict[str, PaletteCacheEntry] = {}
 
 
-def _average_region_rgb(
-    pixels: Sequence[int],
-    width: int,
-    height: int,
-    x0: int,
-    y0: int,
-    x1: int,
-    y1: int,
-) -> Optional[Tuple[float, float, float]]:
-    """Return the average region rgb result."""
-    r_total = g_total = b_total = count = 0
-    x0 = max(0, min(width, x0))
-    x1 = max(0, min(width, x1))
-    y0 = max(0, min(height, y0))
-    y1 = max(0, min(height, y1))
-    for y in range(y0, y1):
-        row = y * ART_BUS_WIDTH * 3
-        for x in range(x0, x1):
-            idx = row + x * 3
-            r, g, b = int(pixels[idx]), int(pixels[idx + 1]), int(pixels[idx + 2])
-            # Ignore completely empty canvas padding. Black album covers still
-            # contribute through their non-zero neighbours; if everything is
-            # black we fall back to the static palette.
-            if r == 0 and g == 0 and b == 0:
-                continue
-            r_total += r
-            g_total += g
-            b_total += b
-            count += 1
-    if count <= 0:
-        return None
-    return (r_total / (count * 255.0), g_total / (count * 255.0), b_total / (count * 255.0))
-
-
-def _tidy_generated_colour(rgb: Tuple[float, float, float]) -> Tuple[float, float, float]:
-    """Return the tidy generated colour result."""
-    hue, sat, val = colorsys.rgb_to_hsv(clamp01(rgb[0]), clamp01(rgb[1]), clamp01(rgb[2]))
-    # Album-art averages are often beige sludge. Keep the hue, but lift it into
-    # a usable display/LED colour. The world has enough beige rectangles.
-    sat = max(0.35, min(1.0, sat * 1.35))
-    val = max(0.22, min(0.92, val))
-    return colorsys.hsv_to_rgb(hue, sat, val)
-
-
-def read_generated_art_palette(prefix: str) -> Optional[List[Tuple[float, float, float]]]:
-    """Read generated art palette."""
+def read_generated_art_palette(prefix: str) -> Optional[Palette]:
+    """Extract and cache a semantic palette from one published artwork frame."""
     if bus.get_int(f"{prefix}/art_valid", 0) != 1:
+        _generated_palette_cache.pop(prefix, None)
         return None
     width = bus.get_int(f"{prefix}/art_width", 0)
     height = bus.get_int(f"{prefix}/art_height", 0)
     if not (2 <= width <= ART_BUS_WIDTH and 2 <= height <= ART_BUS_HEIGHT):
+        _generated_palette_cache.pop(prefix, None)
         return None
+    sequence = bus.get_int(f"{prefix}/art_seq", -1)
+    signature = (sequence, width, height)
+    cached = _generated_palette_cache.get(prefix)
+    if cached is not None and cached[0] == signature:
+        return cached[1]
+
     pixels = bus.try_get_array(f"{prefix}/art_rgb", length=ART_BUS_BYTES, dtype="u8")
     if pixels is None or len(pixels) < ART_BUS_BYTES:
         return None
+    # Artwork publishers increment the sequence after writing the canvas and
+    # dimensions. If it changed while we copied, retry next Aurora tick instead
+    # of caching a frame assembled from two tracks.
+    if bus.get_int(f"{prefix}/art_seq", -1) != sequence:
+        return cached[1] if cached is not None else None
 
-    mid_x = max(1, width // 2)
-    mid_y = max(1, height // 2)
-    regions = (
-        (0, 0, mid_x, mid_y),
-        (mid_x, 0, width, mid_y),
-        (0, mid_y, mid_x, height),
-        (mid_x, mid_y, width, height),
+    extracted = extract_palette(
+        pixels,
+        width,
+        height,
+        stride_width=ART_BUS_WIDTH,
     )
-    palette = []
-    for region in regions:
-        colour = _average_region_rgb(pixels, width, height, *region)
-        if colour is None:
-            return None
-        palette.append(_tidy_generated_colour(colour))
+    palette = extracted.output_colours() if extracted is not None else None
+    _generated_palette_cache[prefix] = (signature, palette)
     return palette
 
 
 def read_dynamic_palette_for_source(active_source: int) -> Optional[List[Tuple[float, float, float]]]:
-    # Prefer Plex UltraBlur when Plex provides it, because it is the server's
-    # purpose-built palette. If it is missing, generate our own from the actual
-    # cover art. Generic local MPRIS sources only have artwork, so generated
-    # palette is their normal dynamic path.
+    # Use the same artwork-derived semantics for Plex and local sources. Plex
+    # UltraBlur remains useful as a fallback while cover art is unavailable.
     """Read dynamic palette for source."""
     if active_source == MEDIA_SOURCE_PLEX:
-        return read_album_rgb() or read_generated_art_palette("/plex")
+        return read_generated_art_palette("/plex") or read_album_rgb()
     if active_source == MEDIA_SOURCE_LOCAL:
         return read_generated_art_palette("/mpris")
     return None

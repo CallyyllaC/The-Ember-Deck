@@ -38,3 +38,6 @@ EmberEngine/configs/pawprint_state.yaml
 Thumbs.db
 desktop.ini
 
+EmberEngine/minstrel (2).py
+EmberEngine/test_artwork_palette.py
+EmberEngine/test_aurora_palette.py
