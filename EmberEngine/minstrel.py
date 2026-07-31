@@ -30,7 +30,6 @@ import os
 import sys
 import time
 import signal
-import colorsys
 import io
 import yaml
 import re
@@ -1119,14 +1118,15 @@ def try_publish_ultrablur(track) -> bool:
         if ubc is None:
             return False
 
-        corners = (
-            hex_to_rgba_f32(getattr(ubc, "topLeft", None)),
-            hex_to_rgba_f32(getattr(ubc, "topRight", None)),
-            hex_to_rgba_f32(getattr(ubc, "bottomLeft", None)),
-            hex_to_rgba_f32(getattr(ubc, "bottomRight", None)),
+        encoded_corners = (
+            getattr(ubc, "topLeft", None),
+            getattr(ubc, "topRight", None),
+            getattr(ubc, "bottomLeft", None),
+            getattr(ubc, "bottomRight", None),
         )
-        if any(max(corner[:3]) <= 0.0 for corner in corners):
+        if not all(_valid_hex_colour(value) for value in encoded_corners):
             return False
+        corners = tuple(hex_to_rgba_f32(value) for value in encoded_corners)
 
         for key, rgba in zip((KEY_TL_RGBA, KEY_TR_RGBA, KEY_BL_RGBA, KEY_BR_RGBA), corners):
             bus.set_array(key, tidy_ultrablur(rgba), "f32")
@@ -1137,17 +1137,26 @@ def try_publish_ultrablur(track) -> bool:
         return False
 
 
-def tidy_ultrablur(rgba, sat_min=0.3, val_min=0.2, val_max=0.9):
-    """Handle the tidy ultrablur lifecycle step."""
+def tidy_ultrablur(rgba, sat_min=None, val_min=None, val_max=None):
+    """Return raw, bounded UltraBlur RGBA for Aurora's colour policy."""
+    _ = (sat_min, val_min, val_max)
     r, g, b, a = rgba
-    # RGB 0..1 → HSV
-    h, s, v = colorsys.rgb_to_hsv(r, g, b)
-    # enforce minimum saturation so colours aren't muddy greys
-    s = max(s, sat_min)
-    # clamp value to avoid blown-out white or too-dark blobs
-    v = min(max(v, val_min), val_max)
-    r2, g2, b2 = colorsys.hsv_to_rgb(h, s, v)
-    return [r2, g2, b2, a]
+    return [max(0.0, min(1.0, float(value))) for value in (r, g, b, a)]
+
+
+def _valid_hex_colour(value) -> bool:
+    """Return whether Plex supplied a complete RGB or RGBA hex colour."""
+    if not isinstance(value, str):
+        return False
+    encoded = value.strip().removeprefix("#")
+    if len(encoded) not in (6, 8):
+        return False
+    try:
+        int(encoded, 16)
+        return True
+    except ValueError:
+        return False
+
 
 def hex_to_rgba_f32(h: str):
     """

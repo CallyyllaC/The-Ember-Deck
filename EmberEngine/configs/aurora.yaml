@@ -12,6 +12,27 @@ fallback_hue: 0.0
 update_hz: 10.0
 album_timeout_s: 2.0
 
-# Aurora extracts dominant, accent, dark and light colours from the published
-# 48x48 Plex or MPRIS artwork. Plex UltraBlur remains the artwork fallback.
+# Plex uses its UltraBlur palette when available, then falls back to dominant,
+# accent, dark and light colours extracted from the published 48x48 artwork.
+# MPRIS/local media uses the artwork path directly.
 generated_palette_enabled: true
+
+# Output-safe palette policy, shared by extracted artwork and Plex UltraBlur.
+# Exact black stays neutral rather than borrowing a misleading hue. Near-black
+# and dark grayscale colours borrow the strongest artwork hue; pale grayscale
+# is preserved for useful white peaks.
+palette_near_black_value: 0.05
+palette_near_black_saturation: 0.78
+palette_grayscale_saturation: 0.12
+palette_pale_grayscale_value: 0.60
+palette_pure_black_gray_value: 0.035
+
+# Role order is dominant, accent, dark, light.
+palette_dominant_min_saturation: 0.55
+palette_dominant_min_value: 0.28
+palette_accent_min_saturation: 0.65
+palette_accent_min_value: 0.48
+palette_dark_min_saturation: 0.70
+palette_dark_min_value: 0.10
+palette_light_min_saturation: 0.30
+palette_light_min_value: 0.75

@@ -1,8 +1,8 @@
 """Semantic colour-palette extraction for decoded album artwork.
 
 The extractor deliberately describes the whole cover rather than averaging
-spatial quadrants.  Its four results are dominant, accent, dark and light;
-emissive-safe accent/light variants are available for the Deck's LEDs and UI.
+spatial quadrants. Its four results are dominant, accent, dark and light;
+hue-aware output-safe variants are available for the Deck's LEDs and UI.
 """
 
 from __future__ import annotations
@@ -19,10 +19,23 @@ MAXIMUM_ACCENT_LIGHTNESS = 0.72
 MINIMUM_DISTINCT_ACCENT_DISTANCE = 0.035
 BORDER_WEIGHT = 0.15
 
-OUTPUT_ACCENT_SATURATION = (0.40, 0.90)
-OUTPUT_ACCENT_LIGHTNESS = (0.30, 0.65)
-OUTPUT_LIGHT_SATURATION = (0.30, 0.85)
-OUTPUT_LIGHT_LIGHTNESS = (0.50, 0.72)
+ROLE_MINIMUM_SATURATION = (0.55, 0.65, 0.70, 0.30)
+ROLE_MINIMUM_VALUE = (0.28, 0.48, 0.10, 0.75)
+
+
+@dataclass(frozen=True)
+class OutputPalettePolicy:
+    """Visibility floors for dominant, accent, dark and light output roles."""
+
+    near_black_maximum_value: float = 0.05
+    near_black_saturation: float = 0.78
+    grayscale_maximum_saturation: float = 0.12
+    pale_grayscale_minimum_value: float = 0.60
+    pure_black_gray_value: float = 0.035
+    minimum_saturation: Tuple[
+        float, float, float, float
+    ] = ROLE_MINIMUM_SATURATION
+    minimum_value: Tuple[float, float, float, float] = ROLE_MINIMUM_VALUE
 
 
 @dataclass(frozen=True)
@@ -34,24 +47,99 @@ class ArtworkPalette:
     dark: Rgb8
     light: Rgb8
 
-    def output_colours(self) -> List[RgbFloat]:
-        """Return the four colours in the order consumed by the Deck."""
-        accent = _output_safe(
-            self.accent,
-            OUTPUT_ACCENT_SATURATION,
-            OUTPUT_ACCENT_LIGHTNESS,
-        )
-        light = _output_safe(
-            self.light,
-            OUTPUT_LIGHT_SATURATION,
-            OUTPUT_LIGHT_LIGHTNESS,
-        )
+    def raw_colours(self) -> List[RgbFloat]:
+        """Return unmodified semantic colours in Deck role order."""
         return [
             _to_float_rgb(self.dominant),
-            _to_float_rgb(accent),
+            _to_float_rgb(self.accent),
             _to_float_rgb(self.dark),
-            _to_float_rgb(light),
+            _to_float_rgb(self.light),
         ]
+
+    def output_colours(
+        self,
+        policy: OutputPalettePolicy = OutputPalettePolicy(),
+    ) -> List[RgbFloat]:
+        """Return hue-aware, output-safe colours in Deck role order."""
+        return normalise_output_colours(self.raw_colours(), policy)
+
+
+def normalise_output_colours(
+    colours: Sequence[RgbFloat],
+    policy: OutputPalettePolicy = OutputPalettePolicy(),
+) -> List[RgbFloat]:
+    """Make palette roles visible without destroying their colour identity.
+
+    Exact black becomes neutral dark gray. Near-black and dark grayscale roles
+    borrow the best chromatic artwork hue. Pale neutrals remain untouched, and
+    existing chromatic colours keep their hue while only gaining saturation or
+    value where their semantic role needs it.
+    """
+    if len(colours) != 4:
+        raise ValueError("output palette must contain four colours")
+
+    source = [tuple(_unit(channel) for channel in colour) for colour in colours]
+    reference_hue = _reference_hue(source, policy)
+    output: List[RgbFloat] = []
+
+    for index, colour in enumerate(source):
+        if max(colour) == 0.0:
+            gray = _unit(policy.pure_black_gray_value)
+            output.append((gray, gray, gray))
+            continue
+
+        hue, saturation, value = colorsys.rgb_to_hsv(*colour)
+        minimum_saturation = _unit(policy.minimum_saturation[index])
+        minimum_value = _unit(policy.minimum_value[index])
+
+        if (
+            saturation <= _unit(policy.grayscale_maximum_saturation)
+            and value >= _unit(policy.pale_grayscale_minimum_value)
+        ):
+            output.append(colour)
+            continue
+
+        if value < _unit(policy.near_black_maximum_value):
+            if reference_hue is None:
+                saturation = 0.0
+            else:
+                hue = reference_hue
+                saturation = _unit(policy.near_black_saturation)
+            value = max(value, minimum_value)
+        elif saturation <= _unit(policy.grayscale_maximum_saturation):
+            if reference_hue is None:
+                saturation = 0.0
+            else:
+                hue = reference_hue
+                saturation = minimum_saturation
+            value = max(value, minimum_value)
+        else:
+            saturation = max(saturation, minimum_saturation)
+            value = max(value, minimum_value)
+
+        output.append(colorsys.hsv_to_rgb(hue, saturation, value))
+
+    return output
+
+
+def _reference_hue(
+    colours: Sequence[RgbFloat],
+    policy: OutputPalettePolicy,
+) -> Optional[float]:
+    # Accent is normally the strongest chromatic reference, followed by the
+    # dominant, light and dark roles.
+    for index in (1, 0, 3, 2):
+        hue, saturation, value = colorsys.rgb_to_hsv(*colours[index])
+        if (
+            value >= _unit(policy.near_black_maximum_value)
+            and saturation > _unit(policy.grayscale_maximum_saturation)
+        ):
+            return hue
+    return None
+
+
+def _unit(value: object) -> float:
+    return max(0.0, min(1.0, float(value)))
 
 
 @dataclass(frozen=True)
@@ -260,17 +348,6 @@ def _to_linear(value: float) -> float:
 def _rotate_hue(colour: Rgb8, degrees: float) -> Rgb8:
     hue, lightness, saturation = colorsys.rgb_to_hls(*_to_float_rgb(colour))
     return _from_hls((hue + degrees / 360.0) % 1.0, lightness, saturation)
-
-
-def _output_safe(
-    colour: Rgb8,
-    saturation_range: Tuple[float, float],
-    lightness_range: Tuple[float, float],
-) -> Rgb8:
-    hue, lightness, saturation = colorsys.rgb_to_hls(*_to_float_rgb(colour))
-    saturation = min(saturation_range[1], max(saturation_range[0], saturation))
-    lightness = min(lightness_range[1], max(lightness_range[0], lightness))
-    return _from_hls(hue, lightness, saturation)
 
 
 def _from_hls(hue: float, lightness: float, saturation: float) -> Rgb8:

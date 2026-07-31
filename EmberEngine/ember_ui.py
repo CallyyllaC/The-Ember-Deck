@@ -310,7 +310,29 @@ def marquee_terminal_cells(text: object, width: int, *, now: float, step_s: floa
     return "".join(out).rstrip() or value[:1]
 
 
-def lyric_context_widget(context: Tuple[str, str, str], width: int, height: int) -> Text:
+DEFAULT_TEXT_PALETTE: Tuple[Tuple[int, int, int], ...] = (
+    (118, 83, 75),   # dominant
+    (212, 122, 58),  # accent
+    (75, 29, 25),    # dark
+    (242, 201, 148),  # light
+)
+
+
+def _text_palette_roles(
+    colours: Sequence[Tuple[int, int, int]],
+) -> Tuple[Tuple[int, int, int], ...]:
+    """Return a complete dominant/accent/dark/light palette for rich text."""
+    roles = list(colours[:4])
+    roles.extend(DEFAULT_TEXT_PALETTE[len(roles):])
+    return tuple(roles)
+
+
+def lyric_context_widget(
+    context: Tuple[str, str, str],
+    width: int,
+    height: int,
+    colours: Sequence[Tuple[int, int, int]] = DEFAULT_TEXT_PALETTE,
+) -> Text:
     """Render a controlled previous/current/next lyric stanza.
 
     The current timed line is visually dominant. Neighbours remain present as
@@ -320,16 +342,17 @@ def lyric_context_widget(context: Tuple[str, str, str], width: int, height: int)
     previous, current, next_line = context
     usable_width = max(4, int(width) - 4)  # panel border + horizontal padding
     show_heading = int(height) >= 6
+    dominant, accent, _dark, light = _text_palette_roles(colours)
     rendered = Text()
     if show_heading:
-        rendered.append("LYRICS\n", style="bold #d47a3a")
+        rendered.append("LYRICS\n", style=f"bold {rgb_style(accent)}")
 
     previous_text = truncate_terminal_cells(previous, usable_width) or " "
     current_text = truncate_terminal_cells(current, usable_width) or "—"
     next_text = truncate_terminal_cells(next_line, usable_width) or " "
-    rendered.append(previous_text + "\n", style="#76534b")
-    rendered.append(current_text + "\n", style="bold #f2c994")
-    rendered.append(next_text, style="#76534b")
+    rendered.append(previous_text + "\n", style=rgb_style(dominant))
+    rendered.append(current_text + "\n", style=f"bold {rgb_style(light)}")
+    rendered.append(next_text, style=rgb_style(dominant))
     return rendered
 
 
@@ -358,6 +381,23 @@ def progress_bar(position: float, duration: float, width: int) -> str:
     fraction = clamp01(position / duration) if duration > 0 else 0.0
     filled = int(round(fraction * width))
     return "█" * filled + "░" * (width - filled)
+
+
+def palette_progress_bar(
+    position: float,
+    duration: float,
+    width: int,
+    colours: Sequence[Tuple[int, int, int]],
+) -> Text:
+    """Build a progress bar using the active palette's accent and dark roles."""
+    width = max(6, int(width))
+    fraction = clamp01(position / duration) if duration > 0 else 0.0
+    filled = int(round(fraction * width))
+    _dominant, accent, dark, _light = _text_palette_roles(colours)
+    rendered = Text()
+    rendered.append("█" * filled, style=f"bold {rgb_style(accent)}")
+    rendered.append("░" * (width - filled), style=rgb_style(dark))
+    return rendered
 
 
 def state_name(state: int) -> str:
@@ -1637,9 +1677,15 @@ class EmberUI(App[None]):
         self.query_one("#global-popularity", Static).update(f"POP  {safe_markup(meta['popularity'])}")
         global_progress = self.query_one("#global-progress", Static)
         global_progress_width = max(12, min(72, global_progress.size.width - 2))
-        global_progress.update(
-            f"{progress_bar(meta['position'], meta['duration'], global_progress_width)}\n{fmt_time(meta['position'])} / {fmt_time(meta['duration'])}"
+        progress = palette_progress_bar(
+            meta["position"], meta["duration"], global_progress_width, colours
         )
+        progress.append("\n")
+        progress.append(
+            f"{fmt_time(meta['position'])} / {fmt_time(meta['duration'])}",
+            style=rgb_style(_text_palette_roles(colours)[3]),
+        )
+        global_progress.update(progress)
         self.query_one("#global-time", Static).update(now.strftime("[b]%H:%M[/b]\n%a"))
         self.query_one("#global-date", Static).update(now.strftime("%d %b\n%Y"))
 
@@ -1664,10 +1710,15 @@ class EmberUI(App[None]):
         self.query_one("#now-metadata", Static).update("\n".join(lines))
         self.query_one("#now-art", AlbumArtWidget).set_art_context(self._album_art, colours, self._album_art_seq)
         now_lyrics = self.query_one("#now-lyrics", Static)
-        lyric_key = f"{lyric_context!r}|{now_lyrics.size.width}|{now_lyrics.size.height}"
+        lyric_key = (
+            f"{lyric_context!r}|{tuple(colours)!r}|"
+            f"{now_lyrics.size.width}|{now_lyrics.size.height}"
+        )
         self._update_static_cached(
             "now-lyrics",
-            lyric_context_widget(lyric_context, now_lyrics.size.width, now_lyrics.size.height),
+            lyric_context_widget(
+                lyric_context, now_lyrics.size.width, now_lyrics.size.height, colours
+            ),
             lyric_key,
         )
 
@@ -1683,10 +1734,15 @@ class EmberUI(App[None]):
         ) or [0.0] * int(self.cfg.get("waveform_samples", 160))
         self.query_one("#scope-wave", ScopeWidget).set_waveform(waveform, colours[1])
         scope_lyrics = self.query_one("#scope-lyrics", Static)
-        lyric_key = f"{lyric_context!r}|{scope_lyrics.size.width}|{scope_lyrics.size.height}"
+        lyric_key = (
+            f"{lyric_context!r}|{tuple(colours)!r}|"
+            f"{scope_lyrics.size.width}|{scope_lyrics.size.height}"
+        )
         self._update_static_cached(
             "scope-lyrics",
-            lyric_context_widget(lyric_context, scope_lyrics.size.width, scope_lyrics.size.height),
+            lyric_context_widget(
+                lyric_context, scope_lyrics.size.width, scope_lyrics.size.height, colours
+            ),
             lyric_key,
         )
 
