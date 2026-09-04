@@ -4,10 +4,8 @@
   "status": "paused",
   "type": "software-hardware",
   "tags": [
-    "Python",
-    "Raspberry Pi",
-    "Hardware",
-    "3D Printing"
+    "Integrated System",
+    "Raspberry Pi"
   ],
   "image": "Images/Top Right Final.jpg",
   "content": "docs/awoo.md"
