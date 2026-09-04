@@ -1,0 +1,12 @@
+{
+  "name": "The Ember Deck",
+  "summary": "A Raspberry Pi 5-powered media console built into a restored vintage TV, radio, and cassette unit.",
+  "status": "paused",
+  "type": "software-hardware",
+  "tags": [
+    "Python",
+    "Raspberry Pi",
+    "Hardware",
+    "3D Printing"
+  ]
+}
