@@ -1,0 +1,32 @@
+name: Rebuild awoo.ltd
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'awoo.project.json'
+      - 'docs/**'
+      - 'images/**'
+      - 'Images/**'
+      - 'video/**'
+      - 'videos/**'
+      - 'Video/**'
+      - 'Videos/**'
+  release:
+    types: [published, edited, deleted]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trigger-awoo-rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger awoo.ltd Cloudflare build
+        env:
+          DEPLOY_HOOK_URL: ${{ secrets.AWOO_DEPLOY_HOOK_URL }}
+        run: |
+          test -n "$DEPLOY_HOOK_URL" || { echo "AWOO_DEPLOY_HOOK_URL is not configured"; exit 1; }
+          curl --fail-with-body --silent --show-error --request POST "$DEPLOY_HOOK_URL"
