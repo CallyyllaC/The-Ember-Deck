@@ -28,7 +28,9 @@ class MediaRoutingState:
 
     plex_available: bool = False
     plex_playing: bool = False
+    plex_paused: bool = False
     bluetooth_claimed: bool = False
+    bluetooth_playing: bool = False
     mpris_available: bool = False
     mpris_playing: bool = False
     hdmi2_source: int = HDMI2_SOURCE_PLEX
@@ -45,13 +47,17 @@ def choose_media_target(state: MediaRoutingState) -> Tuple[int, str]:
 
     if state.plex_playing:
         return MEDIA_TARGET_PLEX, "Plex playing"
-    if state.bluetooth_claimed:
-        return MEDIA_TARGET_BLUETOOTH, "Bluetooth claimed"
+    if state.bluetooth_playing:
+        return MEDIA_TARGET_BLUETOOTH, "Bluetooth playing"
     if state.mpris_playing:
         return MEDIA_TARGET_MPRIS, "MPRIS playing"
     if state.hdmi2_source in (HDMI2_SOURCE_RADIO, HDMI2_SOURCE_YOUTUBE):
         return MEDIA_TARGET_MPRIS, "selected HDMI-2 local"
-    if state.hdmi2_source == HDMI2_SOURCE_PLEX and state.last_target == MEDIA_TARGET_MPRIS:
+    if state.plex_paused and state.last_target == MEDIA_TARGET_PLEX:
+        return MEDIA_TARGET_PLEX, "Plex paused"
+    if state.bluetooth_claimed and state.last_target == MEDIA_TARGET_BLUETOOTH:
+        return MEDIA_TARGET_BLUETOOTH, "remembered Bluetooth"
+    if state.hdmi2_source == HDMI2_SOURCE_PLEX:
         return MEDIA_TARGET_PLEX, "HDMI-2 Plex selected"
     if state.last_target == MEDIA_TARGET_PLEX and state.plex_available:
         return MEDIA_TARGET_PLEX, "remembered Plex"

@@ -272,6 +272,7 @@ MEDIA_TARGET_MPRIS = 3
 # MPRIS, but keeping the symbol avoids breaking an out-of-tree helper.
 MEDIA_TARGET_LOCAL = MEDIA_TARGET_MPRIS
 PLEX_PLAYING = 1
+PLEX_PAUSED = 2
 
 MEDIA_TARGET_NAMES = {
     MEDIA_TARGET_NONE: "none",
@@ -1297,7 +1298,9 @@ class Pawprint:
         self._publish_bluetooth_metadata(bt_state)
         bt_claim = self._bluetooth_should_claim(bt_state, now)
         plex_available = self._plex_is_available(now)
-        plex_playing = plex_available and bus.get_int("/plex/play_state", PLEX_PLAYING) == PLEX_PLAYING
+        plex_state = bus.get_int("/plex/play_state", 0)
+        plex_playing = plex_available and plex_state == PLEX_PLAYING
+        plex_paused = plex_available and plex_state == PLEX_PAUSED
 
         bus.set_int("/io/health/bluetooth_media_ok", int(bt_state.connected))
         bus.set_int("/io/health/bluetooth_media_playing", int(bt_state.playing))
@@ -1316,7 +1319,9 @@ class Pawprint:
         target, reason = choose_media_target(MediaRoutingState(
             plex_available=plex_available,
             plex_playing=plex_playing,
+            plex_paused=plex_paused,
             bluetooth_claimed=bt_claim,
+            bluetooth_playing=bt_claim and bt_state.playing,
             mpris_available=mpris_available,
             mpris_playing=mpris_playing,
             hdmi2_source=hdmi2_source,

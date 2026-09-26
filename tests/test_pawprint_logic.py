@@ -45,9 +45,46 @@ class MediaRoutingTests(unittest.TestCase):
             plex_available=True,
             plex_playing=False,
             bluetooth_claimed=True,
+            bluetooth_playing=True,
             mpris_playing=True,
         ))
         self.assertEqual(target, MEDIA_TARGET_BLUETOOTH)
+
+    def test_paused_plex_keeps_play_button_from_lingering_bluetooth(self):
+        target, reason = choose_media_target(MediaRoutingState(
+            plex_available=True,
+            plex_paused=True,
+            bluetooth_claimed=True,
+            bluetooth_playing=False,
+            hdmi2_source=HDMI2_SOURCE_PLEX,
+            last_target=MEDIA_TARGET_PLEX,
+        ))
+        self.assertEqual(target, MEDIA_TARGET_PLEX)
+        self.assertEqual(reason, "Plex paused")
+
+    def test_genuinely_playing_bluetooth_can_take_over_paused_plex(self):
+        target, reason = choose_media_target(MediaRoutingState(
+            plex_available=True,
+            plex_paused=True,
+            bluetooth_claimed=True,
+            bluetooth_playing=True,
+            hdmi2_source=HDMI2_SOURCE_PLEX,
+            last_target=MEDIA_TARGET_PLEX,
+        ))
+        self.assertEqual(target, MEDIA_TARGET_BLUETOOTH)
+        self.assertEqual(reason, "Bluetooth playing")
+
+    def test_paused_bluetooth_retains_its_own_route(self):
+        target, reason = choose_media_target(MediaRoutingState(
+            plex_available=True,
+            plex_paused=True,
+            bluetooth_claimed=True,
+            bluetooth_playing=False,
+            hdmi2_source=HDMI2_SOURCE_PLEX,
+            last_target=MEDIA_TARGET_BLUETOOTH,
+        ))
+        self.assertEqual(target, MEDIA_TARGET_BLUETOOTH)
+        self.assertEqual(reason, "remembered Bluetooth")
 
     def test_playing_mpris_beats_idle_context(self):
         target, _ = choose_media_target(MediaRoutingState(
@@ -71,6 +108,24 @@ class MediaRoutingTests(unittest.TestCase):
         self.assertEqual(target, MEDIA_TARGET_PLEX)
         self.assertEqual(reason, "HDMI-2 Plex selected")
 
+    def test_unavailable_idle_plex_selection_does_not_oscillate_to_mpris(self):
+        target, _ = choose_media_target(MediaRoutingState(
+            plex_available=False,
+            mpris_available=False,
+            hdmi2_source=HDMI2_SOURCE_PLEX,
+            last_target=MEDIA_TARGET_MPRIS,
+        ))
+        self.assertEqual(target, MEDIA_TARGET_PLEX)
+
+        target, reason = choose_media_target(MediaRoutingState(
+            plex_available=False,
+            mpris_available=False,
+            hdmi2_source=HDMI2_SOURCE_PLEX,
+            last_target=target,
+        ))
+        self.assertEqual(target, MEDIA_TARGET_PLEX)
+        self.assertEqual(reason, "HDMI-2 Plex selected")
+
     def test_cold_boot_defaults_to_plex_without_broadcasting(self):
         target, _ = choose_media_target(MediaRoutingState(last_target=MEDIA_TARGET_NONE))
         self.assertEqual(target, MEDIA_TARGET_PLEX)
@@ -78,8 +133,8 @@ class MediaRoutingTests(unittest.TestCase):
     def test_priority_transitions_are_deterministic(self):
         states = [
             MediaRoutingState(),
-            MediaRoutingState(bluetooth_claimed=True),
-            MediaRoutingState(plex_available=True, plex_playing=True, bluetooth_claimed=True),
+            MediaRoutingState(bluetooth_claimed=True, bluetooth_playing=True),
+            MediaRoutingState(plex_available=True, plex_playing=True, bluetooth_claimed=True, bluetooth_playing=True),
             MediaRoutingState(mpris_available=True, mpris_playing=True),
         ]
         self.assertEqual(

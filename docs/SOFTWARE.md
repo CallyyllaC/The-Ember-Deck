@@ -64,6 +64,8 @@ The physical media keys target the most relevant source:
 
 The decision selects exactly one target; commands are never broadcast. BlueZ discovery and Bluetooth command calls run outside Pawprint's 50 Hz GPIO loop, so a slow or unavailable D-Bus service cannot stop button sampling. Plex and MPRIS commands cross worker boundaries as monotonic counters, which prevents a worker restart from replaying an old physical press.
 
+A paused Plex session retains physical-control ownership so the Play key can resume it. A connected phone or a lingering Bluetooth claim cannot steal that paused route; Bluetooth takes over when it is genuinely playing, and a paused Bluetooth source retains ownership only if Bluetooth was already the active target.
+
 Holding REC cycles the HDMI-2 context through Plex, radio and YouTube. The source controller launches or closes the corresponding application, while the MPRIS bridge publishes generic metadata and accepts transport counters.
 
 ## Configuration

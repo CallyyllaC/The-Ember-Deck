@@ -74,7 +74,7 @@ The persisted `pawprint_state.yaml` contains `version: 1` and a `controls` mappi
 | `bluetooth_metadata_refresh_s` | seconds | `1.0` | Slower cadence for title/artist/position/battery properties. |
 | `bluetooth_claim_metadata_enabled` | boolean | `true` | Allows credible long-form metadata to claim routing immediately. |
 | `bluetooth_claim_threshold_s` | seconds | `2.0` | Continuous Playing time required when metadata is insufficient; filters phone notification sounds. |
-| `bluetooth_claim_linger_s` | seconds | `45.0` | Retains a recently credible Bluetooth route across pause/brief status gaps. Active Plex still wins. |
+| `bluetooth_claim_linger_s` | seconds | `45.0` | Retains Bluetooth ownership across pause/brief status gaps when Bluetooth was already the active target. Active or paused Plex ownership still wins otherwise. |
 | `bluetooth_claim_min_duration_ms` | milliseconds | `30000` | Minimum track duration that helps metadata count as real media. |
 | `media_keys_enabled` | boolean | `true` | Enables fallback virtual Linux media-key device creation. Direct Plex/Bluetooth/MPRIS routes do not broadcast to it. |
 | `uinput_path` | path | `/dev/uinput` | Kernel uinput device. Requires installed module/rule. |
