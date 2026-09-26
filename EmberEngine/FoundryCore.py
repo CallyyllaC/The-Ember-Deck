@@ -3,7 +3,6 @@
 import os
 import sys
 import time
-import shlex
 import signal
 import subprocess
 from pathlib import Path
@@ -102,6 +101,31 @@ def _hb_progress(name: str) -> bool:
     return (last is None) or (cur != last)
 
 
+def evaluate_worker_health(
+    *,
+    alive: bool,
+    in_warmup: bool,
+    heartbeat_fresh: bool,
+    heartbeat_progressed: bool,
+    failure_count: int,
+    failure_limit: int,
+) -> tuple[bool, int, str]:
+    """Return ``(restart_required, new_failure_count, reason)`` for one worker."""
+    if not alive:
+        return True, failure_count, "process exited"
+    if in_warmup:
+        return False, 0, "warming up"
+    if heartbeat_fresh or heartbeat_progressed:
+        return False, 0, "healthy"
+    failures = max(0, int(failure_count)) + 1
+    return failures >= max(1, int(failure_limit)), failures, f"heartbeat stale x{failures}"
+
+
+def next_restart_backoff(current: float, cap: float) -> float:
+    """Double a restart delay without exceeding its configured ceiling."""
+    return min(max(0.0, float(current)) * 2.0, max(0.0, float(cap)))
+
+
 def _group_stop(procs: Dict[str, subprocess.Popen]) -> None:
     """Stop all children gently, then force if needed."""
     for name, p in procs.items():
@@ -142,163 +166,12 @@ def _group_start() -> Dict[str, subprocess.Popen]:
 def _config_logger():
     """Handle the config logger lifecycle step."""
     set_queue(daemon_queue)
-    
-def launch_kiosk_browser(url="http://127.0.0.1:32500"):
-    """Launch Firefox kiosk once the Wayland desktop is ready."""
-
-    env = os.environ.copy()
-    env["MOZ_ENABLE_WAYLAND"] = "1"
-
-    runtime_dir = Path(env.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
-    wayland_display = env.get("WAYLAND_DISPLAY", "wayland-0")
-    wayland_socket = runtime_dir / wayland_display
-
-    # Do not hold up the Deck forever, but give Labwc time to exist.
-    deadline = time.monotonic() + 30.0
-    while not wayland_socket.exists():
-        if time.monotonic() >= deadline:
-            print(
-                f"[kiosk] Wayland socket did not appear: {wayland_socket}",
-                flush=True,
-            )
-            return
-        time.sleep(0.25)
-
-    # Labwc may have created its socket a fraction before it is ready to map windows.
-    time.sleep(0.75)
-
-    subprocess.call(
-        ["pkill", "-f", "firefox"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    time.sleep(0.3)
-
-    for attempt in range(1, 16):
-        process = subprocess.Popen(
-            ["firefox", "--kiosk", url],
-            env=env,
-        )
-
-        time.sleep(1.0)
-
-        # Firefox is still alive, so it accepted the display.
-        if process.poll() is None:
-            print(f"[kiosk] Firefox launched on attempt {attempt}", flush=True)
-            return
-
-        print(
-            f"[kiosk] Firefox exited during startup, retry {attempt}/15",
-            flush=True,
-        )
-        time.sleep(1.0)
-
-    print("[kiosk] Firefox failed to launch after 15 attempts", flush=True)
-
-# --- Speaker self-test ---------------------------------------------------
-
-SPEAKER_TEST_FILES = [
-    "/usr/share/sounds/alsa/Front_Left.wav",    # left
-    "/usr/share/sounds/alsa/Front_Right.wav",   # right
-    "/usr/share/sounds/alsa/Front_Center.wav",  # both + sub punch
-]
-
-def boot_speaker_self_test(delay_between=0.3):
-    """
-    On boot, play short test sounds through:
-      1. Left speaker
-      2. Right speaker
-      3. Center (sum -> mains + sub)
-
-    This both:
-      - Wakes up the audio graph (PipeWire / Pulse / DAC)
-      - Confirms all speakers are alive
-    """
-
-    for wav in SPEAKER_TEST_FILES:
-        subprocess.run(
-            ["paplay", wav],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        time.sleep(delay_between)
-        
-def wait_for_audio_ready(timeout=10):
-    """
-    Wait until Pulse/PipeWire is reachable and at least one sink exists.
-    We don't care if it's RUNNING/IDLE/SUSPENDED – paplay or Plexamp will wake it.
-    """
-    start = time.time()
-
-    while time.time() - start < timeout:
-        # 1. Does Pulse respond at all?
-        info_rc = subprocess.run(
-            ["pactl", "info"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        ).returncode
-
-        if info_rc != 0:
-            time.sleep(0.3)
-            continue
-
-        # 2. Do we have *any* sink? (state doesn't matter)
-        try:
-            sinks = subprocess.check_output(
-                ["pactl", "list", "short", "sinks"],
-                stderr=subprocess.DEVNULL
-            ).decode().strip()
-        except subprocess.CalledProcessError:
-            sinks = ""
-
-        if sinks:
-            return True
-
-        time.sleep(0.3)
-
-    return False
-
-
-def start_plexamp():
-    """
-    Start Plexamp cleanly after confirming the audio backend is stable.
-    Kills old zombie instances first, then launches with --device pulse.
-    """
-
-    print("[Deck] Preparing to start Plexamp…")
-
-    # 1. Murder any leftover Plexamp processes (systemd left-behinds)
-    subprocess.call(
-        ["pkill", "-f", "plexamp/js/index.js"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
-    time.sleep(0.3)
-
-    # 2. Ensure audio is actually ready before launching Plexamp
-    boot_speaker_self_test()
-    if not wait_for_audio_ready():
-        print("[Deck] Warning: audio backend not fully ready, launching anyway.")
-
-    # 3. Launch Plexamp as the current user
-    cmd = f"/usr/bin/node {Path.home() / 'plexamp/js/index.js'} --device pulse"
-
-    subprocess.Popen(
-        shlex.split(cmd),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.STDOUT
-    )
-
-    print("[Deck] Plexamp launched.")
 
 # -------------------- Main --------------------
 
 def main():
     """Configure and run the component until shutdown."""
     global manager, daemon_queue
-    # start_plexamp()
-    # launch_kiosk_browser()
-    
     stopping = False
 
     def on_stop(signum, frame):
@@ -332,31 +205,23 @@ def main():
                 alive = (p is not None) and (p.poll() is None)
                 nowm = time.monotonic()
 
-                if not alive:
+                in_warmup = nowm - last_start.get(name, 0.0) < WARMUP_GRACE_S
+                fresh = _hb_fresh(name, HEARTBEAT_GRACE_S) if alive and not in_warmup else False
+                step = _hb_progress(name) if alive and not in_warmup else False
+
+                restart, failures, health_reason = evaluate_worker_health(
+                    alive=alive,
+                    in_warmup=in_warmup,
+                    heartbeat_fresh=fresh,
+                    heartbeat_progressed=step,
+                    failure_count=fail_streak.get(name, 0),
+                    failure_limit=FAIL_CONSEC_N,
+                )
+                fail_streak[name] = failures
+                if restart:
                     unhealthy = True
-                    reason = f"{name}: process exited"
+                    reason = f"{name}: {health_reason}"
                     break
-
-                # warmup grace
-                if nowm - last_start.get(name, 0.0) < WARMUP_GRACE_S:
-                    continue
-
-                fresh = _hb_fresh(name, HEARTBEAT_GRACE_S)
-                step  = _hb_progress(name)
-                ok = fresh or step
-
-                # debug print so you can see what it's doing
-                #age_ms = int(time.monotonic() * 1000) - bus.get_int(f"/proc/{name}/heartbeat_ms", 0)
-                #print(f"{name} hb: age_ms={age_ms} fresh={fresh} step={step} ok={ok}")
-
-                if not ok:
-                    fail_streak[name] = fail_streak.get(name, 0) + 1
-                    if fail_streak[name] >= FAIL_CONSEC_N:
-                        unhealthy = True
-                        reason = f"{name}: heartbeat stale x{fail_streak[name]}"
-                        break
-                else:
-                    fail_streak[name] = 0
 
             if unhealthy:
                 log_error("FoundryCore", "group_restart", reason)
@@ -364,7 +229,7 @@ def main():
                 _group_stop(procs)
                 time.sleep(0.2)
                 procs = _group_start()
-                next_backoff = min(next_backoff * 2.0, RESTART_BACKOFF_CAP_S)
+                next_backoff = next_restart_backoff(next_backoff, RESTART_BACKOFF_CAP_S)
             else:
                 next_backoff = RESTART_BACKOFF_INITIAL_S
 

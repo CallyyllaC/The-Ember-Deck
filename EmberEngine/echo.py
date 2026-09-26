@@ -41,6 +41,7 @@ DEFAULTS = dict(
     # the FFT spectrum used by Foxfire.
     waveform_samples=160,
     waveform_key="/audio/waveform",
+    audio_reconnect_s=2.0,
 )
 
 
@@ -133,6 +134,7 @@ def main() -> None:
         "buf": buf,
         "fft_size": fftn,
         "have_audio": False,
+        "stream_finished": False,
     }
 
     # ---- publish static meta once ----
@@ -173,20 +175,12 @@ def main() -> None:
 
         state["have_audio"] = True
 
+    def audio_finished_callback():
+        """Tell the main loop that PortAudio ended the stream."""
+        state["stream_finished"] = True
+
     # derive blocksize from smoothness; smaller block = lower latency, more CPU
     blocksize = int(1024 * max(0.25, float(cfg["smoothness"])))
-
-    stream = sd.InputStream(
-        samplerate=sr,
-        channels=ch,
-        dtype="float32",
-        blocksize=blocksize,
-        device=dev,
-        callback=audio_callback,
-    )
-    
-    
-    log_event(proc, "audio_stream_connected", {"sr":sr, "channels":ch, "blocksize":blocksize, "device":dev})
 
     stopping = False
 
@@ -201,13 +195,66 @@ def main() -> None:
     seq = 0
     last_hb = 0.0
     next_pub = time.monotonic()
+    next_connect_at = 0.0
+    stream = None
+    audio_fault_active = False
 
     try:
-        stream.start()
-        log_info(proc, "audio_stream_started")
-
         while not stopping:
             now = time.monotonic()
+
+            if stream is None and now >= next_connect_at:
+                candidate = None
+                try:
+                    candidate = sd.InputStream(
+                        samplerate=sr,
+                        channels=ch,
+                        dtype="float32",
+                        blocksize=blocksize,
+                        device=dev,
+                        callback=audio_callback,
+                        finished_callback=audio_finished_callback,
+                    )
+                    candidate.start()
+                    stream = candidate
+                    state["stream_finished"] = False
+                    bus.set_int("/io/health/audio_capture_ok", 1)
+                    event = "audio_stream_recovered" if audio_fault_active else "audio_stream_connected"
+                    log_event(proc, event, {"sr": sr, "channels": ch, "blocksize": blocksize, "device": dev})
+                    audio_fault_active = False
+                    log_info(proc, "audio_stream_started")
+                except Exception as exc:
+                    if candidate is not None:
+                        try:
+                            candidate.close()
+                        except Exception:
+                            pass
+                    if not audio_fault_active:
+                        log_error(proc, "audio capture unavailable", str(exc))
+                    audio_fault_active = True
+                    bus.set_int("/io/health/audio_capture_ok", 0)
+                    next_connect_at = now + max(0.25, float(cfg.get("audio_reconnect_s", 2.0)))
+
+            try:
+                stream_active = (
+                    stream is not None
+                    and not state["stream_finished"]
+                    and bool(stream.active)
+                )
+            except Exception:
+                stream_active = False
+            if stream is not None and not stream_active:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+                stream = None
+                state["have_audio"] = False
+                bus.set_int("/io/health/audio_capture_ok", 0)
+                if not audio_fault_active:
+                    log_error(proc, "audio capture stopped", "PortAudio stream became inactive")
+                audio_fault_active = True
+                next_connect_at = now + max(0.25, float(cfg.get("audio_reconnect_s", 2.0)))
 
             # publish spectrum at fixed FPS
             if now >= next_pub:
@@ -243,9 +290,11 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        bus.set_int("/io/health/audio_capture_ok", 0)
         try:
-            stream.stop()
-            stream.close()
+            if stream is not None:
+                stream.stop()
+                stream.close()
         except Exception:
             pass
         bus.close_all()

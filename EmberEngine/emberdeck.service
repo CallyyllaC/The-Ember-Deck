@@ -1,7 +1,7 @@
 [Unit]
 Description=Ember Deck runtime
-# Plexamp is both a playback source and the local browser UI backend.
-Requires=plexamp.service
+# Plexamp is preferred but is not required for GPIO, Bluetooth, MPRIS, or LEDs.
+Wants=plexamp.service
 After=plexamp.service
 
 [Service]
@@ -9,8 +9,6 @@ Type=simple
 WorkingDirectory=%h/EmberDeck
 Environment=PYTHONUNBUFFERED=1
 
-# Do not start workers until Plexamp's application process is ready.
-ExecStartPre=%h/EmberDeck/wait_for_plexamp.sh
 ExecStart=%h/EmberDeck/run_foundry.sh
 
 Restart=on-failure

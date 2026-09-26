@@ -25,6 +25,10 @@ except Exception:
 _HANDLE_CACHE: Dict[str, shared_memory.SharedMemory] = {}
 
 
+class SharedMemoryLayoutError(RuntimeError):
+    """A persistent segment is smaller than the current reader/writer contract."""
+
+
 def _norm(name: str) -> str:
     """Return the norm result."""
     return ("smem__" + name.strip().replace(" ", "_").replace("/", "__"))[:254]
@@ -56,6 +60,11 @@ def _get_handle(name: str, size: int, create: bool):
     norm = _norm(name)
     h = _HANDLE_CACHE.get(norm)
     if h is not None:
+        if size > h.size:
+            raise SharedMemoryLayoutError(
+                f"shared-memory key {name!r} is {h.size} bytes but this process requires {size}; "
+                "stop Ember Deck, remove the stale /dev/shm segment or reboot, then restart"
+            )
         return h
 
     try:
@@ -64,6 +73,13 @@ def _get_handle(name: str, size: int, create: bool):
         # First writer may have already created it. Re-open without creation.
         h = _open_untracked(norm, create=False, size=0)
 
+    if size > h.size:
+        actual_size = h.size
+        h.close()
+        raise SharedMemoryLayoutError(
+            f"shared-memory key {name!r} is {actual_size} bytes but this process requires {size}; "
+            "stop Ember Deck, remove the stale /dev/shm segment or reboot, then restart"
+        )
     _HANDLE_CACHE[norm] = h
     return h
 

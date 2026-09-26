@@ -2,7 +2,7 @@
 
 [← Project overview](../README.md) · [Hardware and I/O →](HARDWARE.md)
 
-This is a record of how the Ember Deck was built, not a reliable documentry on how another donor unit will come apart, survive the process or go back together in quite the same way.
+This is a record of how the Ember Deck was built, not reliable documentation for how another donor unit will come apart, survive the process or go back together in quite the same way.
 
 The useful part is the order of decisions:
 
@@ -17,7 +17,7 @@ The Ember Deck began as an old Hitachi TV/radio/cassette unit.
 
 ![The donor TV and radio](../Images/TVRadio.jpg)
 
-Again, please do not destroy working vintage equipmentm, there is more than enough broken hardware in the world already.
+Again, please do not destroy working vintage equipment; there is more than enough broken hardware in the world already.
 
 The unit also contained CRT circuitry. Do not poke it, prod it or experimentally discharge anything you do not understand. CRTs and their capacitors can retain dangerous voltages after the set has been unplugged.
 
@@ -73,7 +73,7 @@ This stage is also where it becomes obvious how little usable space an old radio
 
 ## Speakers
 
-The original unit was mono. The final Deck uses a 2.1 amplifier, two external full-range speakers and an internal subwoofer mounted behind the original front grille. Also, don't measure by the speaker grill shape, the visual speaker size was an obvious markeeting ploy, the real internal speaker mount and grill holes covered a conciderably smaller area.
+The original unit was mono. The final Deck uses a 2.1 amplifier, two external full-range speakers and an internal subwoofer mounted behind the original front grille. Do not judge the original speaker size by the grille shape: the real internal mount and grille holes cover a considerably smaller area.
 
 For the external speakers I actually used two electric terminal boxes, and connected them to the main body using two metal door cable conduits.
 

@@ -11,14 +11,15 @@ Config (YAML) is loaded from CONFIG_PATH and should look roughly like:
 
   proc_name: minstrel
 
-  url: "http://192.168.X.X:32400"
-  token: "YOUR_PLEX_TOKEN"
-  username: "your Plex username"      # retained for token refresh fallback
-  password: "your Plex password"
+  url: null
+  token: null
+  username: null
+  password: null
 
-  # How to identify the Plexamp client
-  plex_client_name: "Plexamp"      # match on player.title (optional)
-  plex_client_product: "Plexamp"   # match on player.product (optional)
+  # Supply credentials in the deployed file or EMBERDECK_PLEX_* environment.
+
+  # Required exact player.title for this Deck's Plexamp client
+  plex_client_name: "Ember Deck"
 
   poll_interval_s: 0.5             # how often to query sessions
 
@@ -48,6 +49,7 @@ from plexapi.exceptions import PlexApiException
 
 import synapse as bus  # shared memory helper
 from whisper_daemon import log_info, log_error, log_media, log_event, log_heartbeat
+from runtime_config import ConfigError, require_mapping, validate_minstrel
 
 
 # --------------- playback enums & keys ----------------
@@ -162,6 +164,7 @@ _LRC_TS = re.compile(r"\[(\d+):(\d+(?:\.\d+)?)\]")
 
 # ---------- defaults ----------
 DEFAULTS = dict(
+    proc_name="minstrel",
     server_name=None,
     username=None,
     password=None,
@@ -173,6 +176,7 @@ DEFAULTS = dict(
     # Deck's own Plexamp rather than another phone session.
     plex_control_client_name=None,
     plex_control_client_machine_identifier=None,
+    plex_timeout_s=5.0,
     poll_interval_s=1.0,
     lyrics_update_interval_s=0.25,
     clock_seek_threshold_s=18.0,
@@ -191,9 +195,22 @@ def load_cfg():
     cfg = {}
     if p and Path(p).exists():
         with open(p, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
+            cfg = require_mapping("minstrel", yaml.safe_load(f))
     out = DEFAULTS.copy()
     out.update(cfg)
+    environment_options = {
+        "EMBERDECK_PLEX_SERVER_NAME": "server_name",
+        "EMBERDECK_PLEX_USERNAME": "username",
+        "EMBERDECK_PLEX_PASSWORD": "password",
+        "EMBERDECK_PLEX_URL": "url",
+        "EMBERDECK_PLEX_TOKEN": "token",
+        "EMBERDECK_PLEX_CLIENT_NAME": "plex_client_name",
+        "EMBERDECK_PLEX_CONTROL_CLIENT_NAME": "plex_control_client_name",
+        "EMBERDECK_PLEX_CONTROL_CLIENT_ID": "plex_control_client_machine_identifier",
+    }
+    for environment_name, option_name in environment_options.items():
+        if environment_name in os.environ:
+            out[option_name] = os.environ[environment_name]
     return out
 
 
@@ -255,17 +272,18 @@ def connect_plex(
     left untouched in the YAML for the next refresh.
     """
     token_error = None
+    timeout = max(0.5, float(cfg.get("plex_timeout_s", 5.0)))
 
     if token and url and not force_account_login:
         try:
-            plex = PlexServer(url, token)
+            plex = PlexServer(url, token, timeout=timeout)
             # Force an authenticated request now. Constructing PlexServer is
             # lazy, so without this an expired token can look valid until much
             # later in the polling loop.
-            plex.library.sections()
+            sections = plex.library.sections()
             log_event("minstrel", "connected", {
                 "server": plex.friendlyName,
-                "libraries": str([section.title for section in plex.library.sections()]),
+                "libraries": str([section.title for section in sections]),
             })
             return plex, token, url
         except Exception as exc:
@@ -276,15 +294,15 @@ def connect_plex(
         try:
             if force_account_login:
                 log_info("minstrel", "refreshing Plex connection via saved username/password")
-            account = MyPlexAccount(username, password)
+            account = MyPlexAccount(username, password, timeout=timeout)
             resource = account.resource(servername)
             if resource is None:
                 raise RuntimeError(f"Plex server resource not found: {servername!r}")
 
-            plex = resource.connect()
+            plex = resource.connect(timeout=timeout)
             # Confirm the returned connection is usable before overwriting the
             # cached token. A half-built PlexServer object is not evidence.
-            plex.library.sections()
+            sections = plex.library.sections()
 
             fresh_token = plex._token
             fresh_url = plex._baseurl
@@ -294,7 +312,7 @@ def connect_plex(
             set_loginInfo(fresh_token, fresh_url, cfg)
             log_event("minstrel", "connected", {
                 "server": plex.friendlyName,
-                "libraries": str([section.title for section in plex.library.sections()]),
+                "libraries": str([section.title for section in sections]),
             })
             return plex, fresh_token, fresh_url
         except Exception as exc:
@@ -1563,6 +1581,7 @@ def _clear_lyrics(state: dict) -> None:
 def main():
     """Configure and run the component until shutdown."""
     cfg = load_cfg()
+    validate_minstrel(cfg)
     proc_name = str(cfg.get("proc_name", "minstrel"))
     server_name = cfg.get("server_name")
     username = cfg.get("username")
@@ -1788,4 +1807,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ConfigError as exc:
+        print(str(exc), file=sys.stderr, flush=True)
+        raise SystemExit(2) from None

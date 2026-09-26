@@ -72,11 +72,12 @@ fused 12 V distribution block
         ├── secondary display
         └── cooling fans
 ```
-Whilst the AMP board supports 12v, I opted for 15V as it sounded a bit aenemic, it might sound better with more as I think this amp board can go a lot higher input wise but I didn't test it.
+
+Although the amplifier board supports 12 V, the finished Deck uses 15 V because 12 V sounded anaemic. Higher voltages were not tested; do not exceed the board's rated input.
 
 All low-voltage returns meet at the negative side of the distribution block rather than being daisy-chained through other devices.
 
-High-current branches use heavier cable than the GPIO and signal wiring. Stranded cable ends are terminated with suitable crimps, and audio or signal runs are kept away from the noisier power and LED wiring where practical. Also use ferrites when necisarry.
+High-current branches use heavier cable than the GPIO and signal wiring. Stranded cable ends are terminated with suitable crimps, and audio or signal runs are kept away from the noisier power and LED wiring where practical. Use ferrites where necessary.
 
 The exact fuse fitted to each branch must suit both the installed cable and the expected load.
 
@@ -132,7 +133,7 @@ The current Pawprint setup uses two ADS1115 channels:
 | A2 | Unused | Unused |
 | A3 | Unused | Not opened by Pawprint, but physically connected to a spare POT I have fitted. |
 
-Values are calibrated and normalised through `configs/pawprint.yaml`.
+Values are calibrated and normalised through `configs/pawprint.yaml`. The `gain_input_*` and `colour_input_*` limits are normalised voltage (`AnalogIn.voltage / pot_input_max_v`), **not raw ADC counts** and not volts. See the [configuration reference](CONFIGURATION.md) before recalibrating them.
 
 The controls use soft pickup. When a stored software value and the physical knob position do not match, the value does not jump immediately. The knob must first cross the stored value before it takes control again. This prevents sudden changes after boot or when switching control banks.
 
@@ -150,6 +151,8 @@ The original tape-deck buttons are active-low GPIO inputs with software debounci
 | Record | Change control bank; hold to cycle HDMI-2 source | 5 |
 
 Pawprint sends transport commands to whichever source is currently active: Plexamp, Bluetooth or a local MPRIS player.
+
+Active Plexamp playback has absolute priority. Bluetooth is next, then an active local MPRIS player, then the selected idle HDMI-2 context. Pawprint selects one destination and never broadcasts a physical press. Bluetooth discovery and D-Bus commands run outside the GPIO polling loop so a slow phone or BlueZ service cannot stop button sampling/debouncing.
 
 Eject has no short-press action. Holding it for roughly five seconds flashes the front red LED and calls the shutdown helper:
 

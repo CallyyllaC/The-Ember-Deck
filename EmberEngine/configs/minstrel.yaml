@@ -1,9 +1,26 @@
 proc_name: minstrel
-server_name: [YOUR_PLEX_SERVER]
-username: [YOUR_USERNAME]
-password: [YOUR_PASSWORD]
-url: https://[YOUR_PLEX_URL].plex.direct:32400
-poll_interval_s: 1
+# Supply these here on the deployed Deck or through EMBERDECK_PLEX_* service
+# environment values. Never commit real credentials or a Plex token.
+server_name: null
+username: null
+password: null
+url: null
+token: null
+
+# Required: the title of this Deck's own Plexamp client. Without it, another
+# household Plex session could be mistaken for the physical Deck.
+plex_client_name: null
+plex_control_client_name: null
+plex_control_client_machine_identifier: null
+
+poll_interval_s: 1.0
+plex_timeout_s: 5.0
 lyrics_update_interval_s: 0.25
-clock_resync_threshold_s: 7.0
-token: 
+clock_seek_threshold_s: 18.0
+clock_fresh_nudge_max_s: 1.25
+clock_fresh_deadband_s: 0.35
+clock_offset_change_epsilon_s: 0.001
+album_art_enabled: true
+album_art_width: 48
+album_art_height: 48
+album_art_timeout_s: 5.0

@@ -153,9 +153,19 @@ def main():
         )
         connected = False;
         tmp_hb = 0.0
-        while not connected:
+        connection_fault_active = False
+        while not connected and not stopping:
             time.sleep(1)
-            connected = strip.connect()
+            try:
+                connected = strip.connect()
+            except Exception as exc:
+                connected = False
+                if not connection_fault_active:
+                    log_error(proc_name, "BlinkStick connection failed", str(exc))
+            if not connected and not connection_fault_active:
+                log_error(proc_name, "BlinkStick unavailable", "USB controller not found")
+            connection_fault_active = not connected
+            bus.set_int("/io/health/led_strip_ok", int(connected))
             time.sleep(1)
             
             # heartbeat once per second
@@ -163,7 +173,9 @@ def main():
             if now - tmp_hb > 1.0:
                 heartbeat(proc_name)
                 tmp_hb = now
-                
+        if stopping:
+            return
+
         strip.set_brightness(1.0)
 
         log_event(proc_name, "led_connected", {
@@ -203,7 +215,27 @@ def main():
                 r, g, b, w = map(int, rgbw[idx])
                 strip.set_pixel(idx, (r, g, b, w))
 
-            strip.show()
+            try:
+                strip.show()
+            except Exception as exc:
+                bus.set_int("/io/health/led_strip_ok", 0)
+                log_error(proc_name, "BlinkStick frame write failed", str(exc))
+                strip.close()
+                connected = False
+                while not connected and not stopping:
+                    time.sleep(1)
+                    try:
+                        connected = strip.connect()
+                    except Exception:
+                        connected = False
+                    reconnect_now = time.monotonic()
+                    if reconnect_now - last_hb > 1.0:
+                        heartbeat(proc_name)
+                        last_hb = reconnect_now
+                bus.set_int("/io/health/led_strip_ok", int(connected))
+                if stopping:
+                    break
+                log_event(proc_name, "led_reconnected", {"data_channel": data_channel})
 
             # heartbeat once per second
             now = time.monotonic()
@@ -218,6 +250,7 @@ def main():
                 time.sleep(sleep_for)
 
     finally:
+        bus.set_int("/io/health/led_strip_ok", 0)
         try:
             if strip is not None:
                 strip.off()

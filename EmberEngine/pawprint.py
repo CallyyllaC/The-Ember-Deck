@@ -39,8 +39,10 @@ import signal
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -55,6 +57,16 @@ from adafruit_ht16k33.matrix import Matrix16x8
 
 import synapse as bus
 from whisper_daemon import log_error, log_heartbeat, log_info, log_legacy, log_recovery
+from pawprint_logic import (
+    DebounceState,
+    MediaRoutingState,
+    choose_media_target,
+    bluetooth_transport_action,
+    debounce_level,
+    hold_reached,
+    remap_normalised_voltage,
+)
+from runtime_config import ConfigError, require_mapping, validate_pawprint
 
 
 DEFAULTS = {
@@ -518,7 +530,7 @@ class BluetoothMediaController:
         self.state = BluetoothMediaState()
         return self.state
 
-    def send(self, action: str) -> Tuple[bool, str]:
+    def send(self, action: str, player_path: Optional[str] = None) -> Tuple[bool, str]:
         """Return the send result."""
         methods = {
             "play": "Play",
@@ -528,14 +540,15 @@ class BluetoothMediaController:
             "previous": "Previous",
         }
         method = methods.get(action)
-        if not method or not self.state.player_path:
+        destination = str(player_path or self.state.player_path)
+        if not method or not destination:
             return False, "no Bluetooth media player is available"
         return self._run([
             str(self.cfg.get("gdbus_path", "gdbus")),
             "call",
             "--system",
             "--dest", "org.bluez",
-            "--object-path", self.state.player_path,
+            "--object-path", destination,
             "--method", f"org.bluez.MediaPlayer1.{method}",
         ])
 
@@ -614,12 +627,7 @@ class VirtualMediaKeys:
             raise
 
 
-@dataclass
-class StableValue:
-    """Store a normalized StableValue record."""
-    stable: Optional[int] = None
-    candidate: Optional[int] = None
-    changed_at: float = 0.0
+StableValue = DebounceState
 
 
 @dataclass
@@ -636,7 +644,7 @@ def load_cfg() -> dict:
     loaded = {}
     if config_path is not None and config_path.is_file():
         with config_path.open("r", encoding="utf-8") as fh:
-            loaded = yaml.safe_load(fh) or {}
+            loaded = require_mapping("pawprint", yaml.safe_load(fh))
 
     cfg = DEFAULTS.copy()
     cfg.update(loaded)
@@ -651,6 +659,7 @@ def load_cfg() -> dict:
         state_path = cfg_dir / state_path
     cfg["state_path"] = str(state_path)
     cfg["_config_path"] = str(config_path) if config_path is not None else ""
+    validate_pawprint(cfg)
     return cfg
 
 
@@ -988,6 +997,7 @@ class Pawprint:
         self.hardware = PawprintHardware(cfg)
         self.events = EventRing(int(cfg["event_capacity"]))
         self.running = True
+        self._closed = False
 
         debounce = float(cfg["button_debounce_s"])
         self.buttons: Dict[str, Button] = {
@@ -1043,6 +1053,11 @@ class Pawprint:
         )
         self.last_media_connect_attempt = 0.0
         self.bluetooth_media = BluetoothMediaController(cfg)
+        # BlueZ discovery can require several bounded subprocess calls. Those
+        # calls must never occupy the 50 Hz GPIO/debounce loop.
+        self.media_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pawprint-media")
+        self.bluetooth_refresh_future: Optional[Future] = None
+        self.bluetooth_command_futures: List[Tuple[str, Future]] = []
         self.last_media_source_refresh_at = 0.0
         self.last_media_target = MEDIA_TARGET_NONE
         self.last_media_activity_at = 0.0
@@ -1070,6 +1085,13 @@ class Pawprint:
         bus.set_int("/io/health/media_target", MEDIA_TARGET_NONE)
         bus.set_int("/io/health/media_target_seq", 0)
         bus.set_int("/io/health/media_last_activity_ms", 0)
+        bus.set_int("/io/health/button_event_seq", 0)
+        bus.set_int("/io/health/button_rejected_seq", 0)
+        bus.set_int("/io/health/button_last_code", 0)
+        bus.set_int("/io/health/media_command_seq", 0)
+        bus.set_int("/io/health/media_command_last_target", MEDIA_TARGET_NONE)
+        bus.set_int("/io/health/media_command_last_code", 0)
+        bus.set_int("/io/health/media_command_last_status", 0)
 
         # UI-facing active source mirrors the existing router's chosen target.
         # It is deliberately separate from /io/health so UI code has a stable
@@ -1263,13 +1285,15 @@ class Pawprint:
             status_note(self.proc_name, f"media target: {MEDIA_TARGET_NAMES.get(target, 'unknown')} ({reason})")
 
     def _update_media_sources(self, now: float, *, force: bool = False) -> None:
-        """Update media sources."""
+        """Update routing from cached state and schedule BlueZ refresh off-loop."""
         interval = max(0.10, float(self.cfg.get("media_source_refresh_s", 0.75)))
-        if not force and now - self.last_media_source_refresh_at < interval:
-            return
-        self.last_media_source_refresh_at = now
+        self._drain_external_media_jobs()
+        due = force or now - self.last_media_source_refresh_at >= interval
+        if due and self.bluetooth_refresh_future is None:
+            self.last_media_source_refresh_at = now
+            self.bluetooth_refresh_future = self.media_executor.submit(self.bluetooth_media.refresh)
 
-        bt_state = self.bluetooth_media.refresh()
+        bt_state = self.bluetooth_media.state
         self._publish_bluetooth_metadata(bt_state)
         bt_claim = self._bluetooth_should_claim(bt_state, now)
         plex_available = self._plex_is_available(now)
@@ -1289,19 +1313,16 @@ class Pawprint:
         bus.set_int("/io/health/mpris_media_available", int(mpris_available))
         bus.set_int("/io/health/mpris_media_playing", int(mpris_playing))
 
-        if plex_playing:
-            self._set_last_media_target(MEDIA_TARGET_PLEX, now, "Plex playing")
-        elif bt_claim:
-            self._set_last_media_target(MEDIA_TARGET_BLUETOOTH, now, "Bluetooth claimed")
-        elif mpris_playing:
-            self._set_last_media_target(MEDIA_TARGET_MPRIS, now, "MPRIS playing")
-        elif hdmi2_source in (HDMI2_SOURCE_RADIO, HDMI2_SOURCE_YOUTUBE):
-            # Selecting a local HDMI-2 context must immediately route a future
-            # physical Play press to MPRIS, even while the guest app is still
-            # launching or paused. Bluetooth still wins if it is actually live.
-            self._set_last_media_target(MEDIA_TARGET_MPRIS, now, "HDMI-2 local selected")
-        elif hdmi2_source == HDMI2_SOURCE_PLEX and self.last_media_target == MEDIA_TARGET_MPRIS:
-            self._set_last_media_target(MEDIA_TARGET_PLEX, now, "HDMI-2 Plex selected")
+        target, reason = choose_media_target(MediaRoutingState(
+            plex_available=plex_available,
+            plex_playing=plex_playing,
+            bluetooth_claimed=bt_claim,
+            mpris_available=mpris_available,
+            mpris_playing=mpris_playing,
+            hdmi2_source=hdmi2_source,
+            last_target=self.last_media_target,
+        ))
+        self._set_last_media_target(target, now, reason)
 
     def _resolve_media_target(self, now: float) -> int:
         """Choose one destination, never broadcast controls to every source.
@@ -1311,53 +1332,7 @@ class Pawprint:
         intentional default. This is a physical jukebox, not a committee.
         """
         self._update_media_sources(now, force=True)
-        bt_state = self.bluetooth_media.state
-        bt_claim = self._bluetooth_should_claim(bt_state, now)
-        plex_available = self._plex_is_available(now)
-        plex_playing = plex_available and bus.get_int("/plex/play_state", PLEX_PLAYING) == PLEX_PLAYING
-        mpris_available = bool(bus.get_int(KEY_MPRIS_AVAILABLE, 0))
-        mpris_playing = mpris_available and bus.get_int(KEY_MPRIS_PLAY_STATE, BT_PLAY_STOPPED) == BT_PLAY_PLAYING
-        hdmi2_source = bus.get_int(KEY_HDMI2_SELECTED_SOURCE, HDMI2_SOURCE_PLEX)
-
-        if plex_playing:
-            target = MEDIA_TARGET_PLEX
-            reason = "Plex playing"
-        elif bt_claim:
-            target = MEDIA_TARGET_BLUETOOTH
-            reason = "Bluetooth claimed"
-        elif mpris_playing:
-            target = MEDIA_TARGET_MPRIS
-            reason = "MPRIS playing"
-        elif hdmi2_source in (HDMI2_SOURCE_RADIO, HDMI2_SOURCE_YOUTUBE):
-            target = MEDIA_TARGET_MPRIS
-            reason = "selected HDMI-2 local"
-        elif self.last_media_target == MEDIA_TARGET_BLUETOOTH and bt_claim:
-            target = MEDIA_TARGET_BLUETOOTH
-            reason = "remembered Bluetooth"
-        elif self.last_media_target == MEDIA_TARGET_PLEX and plex_available:
-            target = MEDIA_TARGET_PLEX
-            reason = "remembered Plex"
-        elif self.last_media_target == MEDIA_TARGET_MPRIS and mpris_available:
-            target = MEDIA_TARGET_MPRIS
-            reason = "remembered MPRIS"
-        elif self.last_media_target == MEDIA_TARGET_NONE:
-            # Cold boot: assume the Deck's own Plexamp is intended. If the
-            # workers are still booting, the touchscreen remains the manual
-            # override until Minstrel is alive again.
-            target = MEDIA_TARGET_PLEX
-            reason = "cold boot default"
-        elif plex_available:
-            target = MEDIA_TARGET_PLEX
-            reason = "Plex fallback"
-        elif bt_claim:
-            target = MEDIA_TARGET_BLUETOOTH
-            reason = "Bluetooth fallback"
-        else:
-            target = MEDIA_TARGET_MPRIS
-            reason = "MPRIS fallback"
-
-        self._set_last_media_target(target, now, reason)
-        return target
+        return self.last_media_target
 
     def _send_plex_request(self, name: str) -> bool:
         """Send plex request."""
@@ -1379,42 +1354,82 @@ class Pawprint:
         bus.set_int(key, 1 if seq == 0 else seq)
         return True
 
-    def _send_bluetooth_media(self, name: str) -> Tuple[bool, str]:
-        """Send bluetooth media."""
-        if name == "play":
-            action = "pause" if self.bluetooth_media.state.playing else "play"
-        elif name == "stop":
-            action = "stop"
-        elif name == "ff":
-            action = "next"
-        elif name == "rew":
-            action = "previous"
-        else:
-            return False, "unknown transport command"
-        return self.bluetooth_media.send(action)
+    def _bluetooth_action(self, name: str) -> Tuple[str, str]:
+        """Return the BlueZ action and the currently selected player path."""
+        action = bluetooth_transport_action(name, self.bluetooth_media.state.playing)
+        if not action:
+            return "", ""
+        return action, self.bluetooth_media.state.player_path
+
+    @staticmethod
+    def _media_command_code(name: str) -> int:
+        """Return a stable diagnostic code for a physical transport key."""
+        return {"play": 1, "stop": 2, "ff": 3, "rew": 4}.get(name, 0)
+
+    def _record_media_dispatch(self, name: str, target: int, status: int) -> None:
+        """Publish the most recent routing outcome for field diagnosis."""
+        bus.set_int("/io/health/media_command_seq", bus.get_int("/io/health/media_command_seq", 0) + 1)
+        bus.set_int("/io/health/media_command_last_code", self._media_command_code(name))
+        bus.set_int("/io/health/media_command_last_target", int(target))
+        bus.set_int("/io/health/media_command_last_status", int(status))
+
+    def _drain_external_media_jobs(self) -> None:
+        """Publish completed BlueZ work without waiting in the GPIO loop."""
+        future = self.bluetooth_refresh_future
+        if future is not None and future.done():
+            self.bluetooth_refresh_future = None
+            try:
+                self._publish_bluetooth_metadata(future.result())
+            except Exception as exc:
+                log_error(self.proc_name, "Bluetooth media refresh failed", repr(exc))
+
+        remaining: List[Tuple[str, Future]] = []
+        for name, command_future in self.bluetooth_command_futures:
+            if not command_future.done():
+                remaining.append((name, command_future))
+                continue
+            try:
+                ok, detail = command_future.result()
+            except Exception as exc:
+                ok, detail = False, repr(exc)
+            if ok:
+                bus.set_int("/io/health/media_command_last_status", 2)
+                status_note(self.proc_name, f"Bluetooth media command completed: {name}")
+            else:
+                bus.set_int("/io/health/media_command_last_status", -1)
+                log_error(self.proc_name, "Bluetooth media command failed", f"{name}: {detail}")
+        self.bluetooth_command_futures = remaining
 
     def _route_transport_command(self, name: str, now: float) -> None:
         """Handle the route transport command lifecycle step."""
         target = self._resolve_media_target(now)
         if target == MEDIA_TARGET_PLEX:
             if self._send_plex_request(name):
+                self._record_media_dispatch(name, target, 1)
                 status_note(self.proc_name, f"media command routed to Plex: {name}")
             else:
+                self._record_media_dispatch(name, target, -1)
                 log_error(self.proc_name, "Plex media command rejected", name)
             return
 
         if target == MEDIA_TARGET_BLUETOOTH:
-            ok, detail = self._send_bluetooth_media(name)
-            if ok:
-                status_note(self.proc_name, f"media command routed to Bluetooth: {name}")
-            else:
-                log_error(self.proc_name, "Bluetooth media command failed", f"{name}: {detail}")
+            action, player_path = self._bluetooth_action(name)
+            if not action or not player_path:
+                self._record_media_dispatch(name, target, -1)
+                log_error(self.proc_name, "Bluetooth media command failed", f"{name}: target unavailable")
+                return
+            future = self.media_executor.submit(self.bluetooth_media.send, action, player_path)
+            self.bluetooth_command_futures.append((name, future))
+            self._record_media_dispatch(name, target, 1)
+            status_note(self.proc_name, f"media command dispatched to Bluetooth: {name}")
             return
 
         if target == MEDIA_TARGET_MPRIS:
             if self._send_mpris_request(name):
+                self._record_media_dispatch(name, target, 1)
                 status_note(self.proc_name, f"media command routed to MPRIS: {name}")
             else:
+                self._record_media_dispatch(name, target, -1)
                 log_error(self.proc_name, "MPRIS media command rejected", name)
             return
 
@@ -1435,24 +1450,22 @@ class Pawprint:
     def _debounce_button(self, name: str, pressed: int, now: float) -> None:
         """Consume tape transport locally; do not publish it on the I/O bus."""
         state = self.button_stable[name]
-        if state.candidate != pressed:
-            state.candidate = pressed
-            state.changed_at = now
-        if state.stable is None:
-            # Do not issue a media command simply because a button was held
-            # while the Deck booted.
-            state.stable = pressed
-            return
-        if state.stable != state.candidate and now - state.changed_at >= float(self.cfg["button_debounce_s"]):
-            state.stable = int(state.candidate)
+        accepted, rejected = debounce_level(state, pressed, now, float(self.cfg["button_debounce_s"]))
+        if rejected:
+            bus.set_int("/io/health/button_rejected_seq", bus.get_int("/io/health/button_rejected_seq", 0) + 1)
+        if accepted:
+            bus.set_int("/io/health/button_event_seq", bus.get_int("/io/health/button_event_seq", 0) + 1)
+            bus.set_int(
+                "/io/health/button_last_code",
+                {"play": 1, "stop": 2, "rew": 3, "ff": 4, "eject": 5}.get(name, 0),
+            )
             self._on_transport_edge(name, state.stable, now)
 
     def _update_eject_hold(self, now: float) -> None:
         """Update eject hold."""
         if self.eject_shutdown_fired or self.eject_pressed_at is None:
             return
-        held_for = now - self.eject_pressed_at
-        if held_for >= max(1.0, float(self.cfg["eject_shutdown_hold_s"])):
+        if hold_reached(self.eject_pressed_at, now, max(1.0, float(self.cfg["eject_shutdown_hold_s"]))):
             self.eject_shutdown_fired = True
             self._request_shutdown()
 
@@ -1530,10 +1543,7 @@ class Pawprint:
         lo = float(self.cfg[f"{physical}_input_min"])
         hi = float(self.cfg[f"{physical}_input_max"])
         curve = max(0.05, float(self.cfg[f"{physical}_curve"]))
-        if hi <= lo:
-            return clamp01(raw)
-        normalised = clamp01((raw - lo) / (hi - lo))
-        return clamp01(normalised ** curve)
+        return remap_normalised_voltage(raw, lo, hi, curve)
 
     def _target_for(self, physical: str) -> str:
         """Return the target for result."""
@@ -1825,7 +1835,7 @@ class Pawprint:
             held = hold_s
         fraction = max(0.0, min(1.0, held / hold_s))
         # Floor, not ceil: with ten LEDs, ceil lit the final segment at
-        # 4.5 s of a 5.0 s hold. That made the bar look complete before the
+        # 90% point of a hold. That made the bar look complete before the
         # source-cycle threshold had actually fired. The final LED now comes
         # on only when the threshold is reached (or once fired above clamps
         # ``held`` to ``hold_s``).
@@ -1886,6 +1896,7 @@ class Pawprint:
 
             self.hardware.connect_if_due(now)
             self._ensure_media_keys(now)
+            self._drain_external_media_jobs()
             self._publish_status()
             self._update_media_sources(now)
 
@@ -1909,7 +1920,15 @@ class Pawprint:
                 heartbeat(self.proc_name)
                 self.last_hb = now
 
+        self.close()
+
+    def close(self) -> None:
+        """Release Pawprint-owned resources after normal exit or an exception."""
+        if self._closed:
+            return
+        self._closed = True
         self.state_store.save(self.controls)
+        self.media_executor.shutdown(wait=False, cancel_futures=True)
         self.media_keys.close()
         bus.set_int("/io/health/media_keys_ok", 0)
         self.hardware.disconnect()
@@ -1931,6 +1950,7 @@ def main() -> None:
     try:
         app.run()
     finally:
+        app.close()
         try:
             bus.close_all()
         except Exception:
@@ -1938,4 +1958,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ConfigError as exc:
+        print(str(exc), file=sys.stderr, flush=True)
+        raise SystemExit(2) from None

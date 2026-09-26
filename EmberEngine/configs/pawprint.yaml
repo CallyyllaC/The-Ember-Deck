@@ -21,8 +21,7 @@ colour_input_max: 0.075
 colour_curve: 1.0
 colour_deadband: 0.003
 
-# Conservative semantic ceilings. The physical colour pot has a compressed,
-# non-linear response, so colour and saturation deliberately stop at 0.50.
+# Semantic output ceilings. Physical calibration remains separate above.
 gain_output_max: 1.0
 brightness_output_max: 1.0
 colour_output_max: 1.0

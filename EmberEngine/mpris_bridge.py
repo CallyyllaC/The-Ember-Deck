@@ -110,6 +110,10 @@ CONTROL_KEYS = {
     "next": "/mpris/control/next_seq",
     "previous": "/mpris/control/previous_seq",
 }
+CONTROL_CODES = {"playpause": 1, "stop": 2, "next": 3, "previous": 4}
+KEY_CONTROL_LAST_COMMAND = "/mpris/control/last_command"
+KEY_CONTROL_LAST_OK = "/mpris/control/last_ok"
+KEY_CONTROL_LAST_SEQ = "/mpris/control/last_seq"
 
 FIELD_SEP = "\x1f"
 
@@ -236,6 +240,9 @@ class MprisBridge:
         self._publish(Snapshot())
         for key in CONTROL_KEYS.values():
             bus.set_int(key, bus.get_int(key, 0))
+        bus.set_int(KEY_CONTROL_LAST_COMMAND, 0)
+        bus.set_int(KEY_CONTROL_LAST_OK, 1)
+        bus.set_int(KEY_CONTROL_LAST_SEQ, 0)
         self._clear_art()
         bus.set_int("/io/health/mpris_bridge_ok", 0)
 
@@ -593,6 +600,9 @@ class MprisBridge:
             requests = counter_delta(previous, current)
             for _ in range(requests):
                 if not player:
+                    bus.set_int(KEY_CONTROL_LAST_COMMAND, CONTROL_CODES[name])
+                    bus.set_int(KEY_CONTROL_LAST_OK, 0)
+                    bus.set_int(KEY_CONTROL_LAST_SEQ, current)
                     log_error(self.proc_name, "MPRIS command rejected", f"{name}: no selected player")
                     break
                 ok, detail = self._run([
@@ -601,8 +611,14 @@ class MprisBridge:
                     commands[name],
                 ])
                 if ok:
+                    bus.set_int(KEY_CONTROL_LAST_COMMAND, CONTROL_CODES[name])
+                    bus.set_int(KEY_CONTROL_LAST_OK, 1)
+                    bus.set_int(KEY_CONTROL_LAST_SEQ, current)
                     print(f"[{self.proc_name}] MPRIS control: {name}", flush=True)
                 else:
+                    bus.set_int(KEY_CONTROL_LAST_COMMAND, CONTROL_CODES[name])
+                    bus.set_int(KEY_CONTROL_LAST_OK, 0)
+                    bus.set_int(KEY_CONTROL_LAST_SEQ, current)
                     log_error(self.proc_name, "MPRIS control command failed", f"{name}: {detail}")
                     break
 

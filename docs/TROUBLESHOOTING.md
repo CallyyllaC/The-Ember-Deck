@@ -73,7 +73,7 @@ Avoid relying on a numeric `wpctl` device ID in permanent configuration; IDs can
 
 ## Worker or runtime failure
 
-Foundry supervises the workers, so inspect the whole runtime rather than starting a second copy of an individual hardware worker:
+Foundry supervises the workers, so inspect the whole runtime rather than starting a second copy of an individual hardware worker. Plexamp is a soft dependency; its failure should leave Pawprint, Bluetooth, MPRIS, and the LEDs running:
 
 ```bash
 systemctl --user status emberdeck.service
@@ -87,6 +87,56 @@ The included compact follower is:
 ```
 
 Do not create separate services for Pawprint, Echo, Minstrel or Whisper. Duplicate Pawprint instances would compete for GPIO and I²C ownership.
+
+Foundry's workers are one recovery unit. Restart them with:
+
+```bash
+systemctl --user restart emberdeck.service
+```
+
+The observer services can be recovered independently without touching GPIO:
+
+```bash
+systemctl --user restart ember-ui.service
+systemctl --user restart ember-browser.service
+```
+
+## Physical media key does nothing
+
+Touchscreen control bypasses Pawprint, so first distinguish input, routing and target failure. The quiet `/io/health` counters are more useful than repeatedly pressing buttons while watching a noisy poll log:
+
+```bash
+cd ~/EmberDeck
+.venv/bin/python - <<'PY'
+import synapse as s
+for key in (
+    "/io/health/button_event_seq",
+    "/io/health/button_rejected_seq",
+    "/io/health/button_last_code",
+    "/io/health/media_target",
+    "/io/health/media_command_seq",
+    "/io/health/media_command_last_target",
+    "/io/health/media_command_last_code",
+    "/io/health/media_command_last_status",
+    "/plex/control/last_command",
+    "/plex/control/last_ok",
+    "/mpris/control/last_command",
+    "/mpris/control/last_ok",
+):
+    print(f"{key}: {s.get_int(key, -999)}")
+s.close_all()
+PY
+```
+
+Button codes are Play 1, Stop 2, Fast-forward 3, Rewind 4 (the separate raw button diagnostic uses Rewind 3, Fast-forward 4, and Eject 5). Target codes are none 0, Plex 1, Bluetooth 2, and MPRIS 3. Dispatch status is 0 no command yet, 1 handed to the selected target, 2 confirmed by the direct Bluetooth call, and -1 rejected/failed. Plex and MPRIS final success is in their own `last_ok` key.
+
+- `button_event_seq` does not change: inspect the BCM pin, pull-up, common ground and contact; Pawprint did not accept an edge.
+- only `button_rejected_seq` changes: the contact did not remain stable for `button_debounce_s`.
+- `media_command_seq` changes: the event was received and routed; inspect the target code and its `last_ok`/journal entry.
+- target is Plex while Plex is playing: this is required even if Bluetooth or MPRIS is also active.
+- Bluetooth status is stale/unavailable: check `bluetoothctl devices Connected` and the system Bluetooth journal. BlueZ calls are timeout-bounded and run off the GPIO polling loop, so BlueZ failure should not stop later GPIO edges.
+
+Relevant journal messages contain `media target`, `media command routed`, `dispatched`, `completed`, `rejected`, or `failed` without logging every poll.
 
 ## I²C hardware missing
 
@@ -133,3 +183,6 @@ bluetoothctl
 
 Within `bluetoothctl`, verify the adapter is powered, then pair, trust and connect the device. PipeWire also needs the Bluetooth SPA package installed before it can expose the phone as an audio source.
 
+## Shared-memory layout error after configuration change
+
+Synapse arrays have fixed shapes and survive worker restarts. If a log says a key is smaller than the current process requires after changing `led_count`, `waveform_samples`, `metadata_buffer_bytes`, or `event_capacity`, stop the user services and reboot. This clears `/dev/shm` without guessing at segment names. Do not delete unrelated shared-memory objects on a live system.

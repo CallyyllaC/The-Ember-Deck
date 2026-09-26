@@ -10,7 +10,7 @@ A small but important note: the donor unit was already dead. Please do not destr
 
 The Deck is both a finished machine and an ongoing experiment. These documents record the final working design, how it was put together and the lessons learned along the way.
 
-They are not a drop-in recipe for every vintage radio. Hardware and Software requirments will vary.
+They are not a drop-in recipe for every vintage radio. Hardware and software requirements will vary.
 
 > [Watch the final testing demonstration](Videos/Final%20Testing%20Demo.mp4)
 
@@ -37,6 +37,7 @@ The documentation has been split into separate guides.
 | [Build story](docs/BUILD.md) | Teardown, restoration, speakers, packaging and lessons learned |
 | [Hardware and I/O](docs/HARDWARE.md) | Power design, peripherals, GPIO, I²C, controls and indicators |
 | [Software architecture](docs/SOFTWARE.md) | Runtime services, workers, shared state and source routing |
+| [Configuration reference](docs/CONFIGURATION.md) | Every runtime option, units, defaults, interactions and restart requirements |
 | [Installation](docs/INSTALLATION.md) | Raspberry Pi packages, Python environment, permissions and services |
 | [Backup and troubleshooting](docs/TROUBLESHOOTING.md) | System images, audio routing, USB recovery and common checks |
 | [Media gallery](docs/MEDIA.md) | Finished-build photographs and demonstration videos |

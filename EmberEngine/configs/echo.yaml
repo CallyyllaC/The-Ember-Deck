@@ -1,4 +1,13 @@
-# Add these two lines to the existing Echo config. The rest of your audio
-# capture configuration stays exactly as it is.
+# PipeWire/PortAudio capture feeding Foxfire and the Ember UI scope.
+proc_name: echo
+sample_rate: 48000
+channels: 2
+smoothness: 0.25
+fps: 50
+fft_size: 2048
+# rFFT publishes fft_size/2+1 real bins. Echo corrects a mismatched value.
+bins: 1025
+device: default
+audio_reconnect_s: 2.0
 waveform_samples: 160
 waveform_key: /audio/waveform

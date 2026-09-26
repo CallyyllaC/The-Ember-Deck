@@ -1,6 +1,6 @@
 # Software architecture
 
-[← Hardware and I/O](HARDWARE.md) · [Installation →](INSTALLATION.md)
+[← Hardware and I/O](HARDWARE.md) · [Configuration →](CONFIGURATION.md)
 
 The Ember Engine is a collection of supervised workers rather than one monolithic application. Workers communicate through Synapse shared state, which keeps hardware ownership, media discovery, rendering and UI concerns separate.
 
@@ -10,25 +10,25 @@ Note, HDMI-2 context refers to the touchscreen display.
 
 The repository contains these user-service definitions:
 
-- `emberdeck.service` waits for Plexamp and launches Foundry.
+- `emberdeck.service` orders Plexamp first and launches Foundry. Plexamp is a soft dependency: GPIO, Bluetooth, MPRIS, and LEDs still start if it is down.
 - `ember-ui.service` launches the Textual UI after the graphical session and runtime are available.
-- `run_ember_browser.sh` launches the touchscreen firefox window for Plex, this was originally launched via python but there were timing issues during boot.
+- `ember-browser.service` launches the touchscreen Firefox kiosk after both Wayland and the local Plexamp page respond.
 
-Foundry starts each worker with its matching YAML path in `CONFIG_PATH`, monitors heartbeat counters, and restarts unhealthy processes with bounded backoff.
+Foundry starts each worker in the order below with its matching YAML path in `CONFIG_PATH`. It monitors process exit and monotonic heartbeat counters. A worker gets a 30-second warm-up and 30-second heartbeat freshness window; 30 consecutive stale checks cause a complete worker-group restart with bounded 5–15 second backoff. Systemd separately restarts Foundry if the supervisor itself exits. The group restart is deliberate: it returns shared ownership to a known state and prevents a second Pawprint from competing for physical I/O.
 
 ## Workers
 
 | Worker | Responsibility |
 |:--|:--|
 | `whisper_daemon.py` | Logging |
-| `pawprint.py` | GPIO |
-| `hdmi2_source_controller.py` | Source Control |
-| `mpris_bridge.py` | MPRIS Manager |
-| `echo.py` | Captures audio spectrum |
-| `minstrel.py` | Plex Manager |
-| `aurora.py` | Colour Manager |
-| `foxfire.py` | Transforms audio data into a visualiser |
-| `willo_wisp.py` | Drives LED Strip |
+| `pawprint.py` | Sole owner of GPIO, ADS1115, HT16K33, uinput, physical debounce/holds, Bluetooth AVRCP state and physical transport routing |
+| `hdmi2_source_controller.py` | Owns the single graphical guest-app slot and Labwc rules; consumes REC hold cycle requests |
+| `mpris_bridge.py` | Selects one allowed local MPRIS player, publishes metadata and consumes MPRIS command counters |
+| `echo.py` | Captures PipeWire/PortAudio input and publishes spectrum/waveform frames |
+| `minstrel.py` | Monitors and controls the Deck's named Plexamp client; publishes Plex metadata, artwork and lyrics |
+| `aurora.py` | Owns artwork/manual colour policy and publishes physical/UI palettes |
+| `foxfire.py` | Converts spectrum, selectors and semantic controls into an RGBA LED frame |
+| `willo_wisp.py` | Sole owner of the BlinkStick USB output; reconnects when the controller disappears |
 
 ## Shared-state flow
 
@@ -51,6 +51,8 @@ Local players ──────► MPRIS bridge ──────────�
 
 Pawprint remains the single hardware owner. Other workers request state changes instead of opening GPIO or I²C devices themselves.
 
+Synapse uses one named shared-memory segment per key. Writers own their namespaces: Pawprint owns `/io/*`, `/media/*`, and `/bt/*`; Minstrel owns `/plex/*` and `/lyrics/*`; MPRIS bridge owns `/mpris/*`; Echo owns `/audio/*`; Aurora owns `/theme/*`; and Foxfire owns `/leds/main/*`. Fixed-size array/text segments survive worker restarts. After changing a configured array size such as `event_capacity`, `waveform_samples`, `metadata_buffer_bytes`, or `led_count`, stop the services and reboot (or remove only the named stale segments) before restart.
+
 ## Source and transport routing
 
 The physical media keys target the most relevant source:
@@ -59,6 +61,8 @@ The physical media keys target the most relevant source:
 2. Active Bluetooth AVRCP media
 3. Active local MPRIS playback
 4. The selected HDMI-2 context when every source is idle
+
+The decision selects exactly one target; commands are never broadcast. BlueZ discovery and Bluetooth command calls run outside Pawprint's 50 Hz GPIO loop, so a slow or unavailable D-Bus service cannot stop button sampling. Plex and MPRIS commands cross worker boundaries as monotonic counters, which prevents a worker restart from replaying an old physical press.
 
 Holding REC cycles the HDMI-2 context through Plex, radio and YouTube. The source controller launches or closes the corresponding application, while the MPRIS bridge publishes generic metadata and accepts transport counters.
 
@@ -80,13 +84,15 @@ Configuration files live in `EmberEngine/configs`:
 | `whisper_daemon.yaml` | Whisper | No |
 | `willo_wisp.yaml` | Will-o'-the-wisp | No |
 
-Machine-specific device names and credentials should remain outside public configuration or be injected through the environment.
+Machine-specific device names and credentials should remain outside public configuration or be injected through the documented environment values. See the [configuration reference](CONFIGURATION.md) for every option, unit, default, interaction, validation rule, and restart requirement.
 
 ## Logging
 
-The non technical answer is that logging is split into, UI shown fancy logs which give the device ambience, and real warning signs are wrote to disk logs, there is an overlap but they are still seperate enough to be concidered different.
+Logging has two audiences: the panel shows a small personality-driven event stream, while priority-zero faults are retained as durable rotating JSONL. There is intentional overlap, but the durable files are operational history, not a transcript of ambient UI lines.
 
 The technical answer is that workers send structured messages to Whisper. Whisper owns scheduling, the bound UI and error history. Standard output and error remain available to the user journal. The implementation contract is documented directly in `whisper_daemon.py`, `spirit_messages.py` and `spirit_ink.py`.
+
+For physical controls, Pawprint also publishes quiet diagnostic counters under `/io/health`: accepted/rejected button sequences, last button code, chosen target, command sequence, and dispatch status. Minstrel and MPRIS bridge publish their last command and success state in their own `/control/*` keys.
 
 ## Diagnostic tools
 

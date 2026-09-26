@@ -89,7 +89,6 @@ class BlinkstickProRGBW:
         """
         dev = blinkstick.find_first()
         if dev is None:
-            raise RuntimeError("No BlinkStick device found")
             return False
 
         self._dev = dev
