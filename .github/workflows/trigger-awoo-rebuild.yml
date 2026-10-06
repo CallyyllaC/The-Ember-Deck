@@ -4,15 +4,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - 'awoo.project.json'
-      - 'docs/**'
-      - 'images/**'
-      - 'Images/**'
-      - 'video/**'
-      - 'videos/**'
-      - 'Video/**'
-      - 'Videos/**'
   release:
     types: [published, edited, deleted]
   workflow_dispatch:
