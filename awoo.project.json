@@ -8,5 +8,8 @@
     "Raspberry Pi"
   ],
   "image": "Images/Top Right Final.jpg",
-  "content": "docs/awoo.md"
+  "content": "docs/awoo.md",
+  "licence": "ERROR",
+  "licenceLink": "ERROR",
+  "licenceLinkText": "ERROR"
 }
