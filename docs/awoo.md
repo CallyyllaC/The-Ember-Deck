@@ -40,6 +40,7 @@ For the fuller story, including considerably more questionable engineering decis
 - Plex, Bluetooth, DAB radio and YouTube Music source support
 - Full Plex integration
 - Bluetooth, DAB and YouTube Music metadata support when available
+- Discord RP support with artwork
 
 ## Licence
 
