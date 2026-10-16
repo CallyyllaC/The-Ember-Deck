@@ -11,6 +11,7 @@ not print lyric text, only stream metadata and response/parse diagnostics.
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -20,40 +21,48 @@ import yaml
 from plexapi.myplex import MyPlexAccount
 from plexapi.server import PlexServer
 
+from plex_auth import new_redactor, resolve_plex_auth
+
 ROOT = Path(__file__).resolve().parent
 CFG_PATH = ROOT / "configs" / "minstrel.yaml"
+REDACT = new_redactor()
 LRC_TS = re.compile(r"\[(\d+):(\d+(?:\.\d+)?)\]")
 
 
 def load_cfg() -> dict[str, Any]:
-    """Load defaults and merge any component-specific YAML configuration."""
+    """Load minstrel.yaml plus the identity environment overrides Minstrel uses."""
     if not CFG_PATH.exists():
         raise FileNotFoundError(f"Missing config: {CFG_PATH}")
     with CFG_PATH.open("r", encoding="utf-8") as fh:
-        return yaml.safe_load(fh) or {}
+        cfg = yaml.safe_load(fh) or {}
+    for env_name, option in (("EMBERDECK_PLEX_SERVER_NAME", "server_name"),
+                             ("EMBERDECK_PLEX_CLIENT_NAME", "plex_client_name")):
+        if env_name in os.environ:
+            cfg[option] = os.environ[env_name]
+    cfg["_config_dir"] = str(CFG_PATH.parent)
+    return cfg
 
 
 def connect(cfg: dict[str, Any]):
-    """Use the same token-first, credential-fallback intent as Minstrel."""
-    token = cfg.get("token")
-    url = cfg.get("url")
-    if token and url:
+    """Use Minstrel's credential precedence (env, minstrel_secrets.yaml, legacy YAML)."""
+    auth = resolve_plex_auth(cfg, os.environ)
+    REDACT.add(auth.password, auth.token)
+    for _, _, problem in auth.problems:
+        print(f"Note: {problem}")
+    if auth.has_token:
         try:
-            plex = PlexServer(url, token)
+            plex = PlexServer(auth.url, auth.token)
             _ = plex.friendlyName
-            print("Connected using saved token.")
+            print(f"Connected using the {auth.token_source} token.")
             return plex
         except Exception as exc:
-            print(f"Saved token failed: {type(exc).__name__}: {exc}")
+            print(f"Saved token failed: {type(exc).__name__}: {REDACT(exc)}")
 
-    username = cfg.get("username")
-    password = cfg.get("password")
-    server_name = cfg.get("server_name")
-    if not (username and password and server_name):
+    if not auth.has_account:
         raise RuntimeError("No working token and no username/password/server_name fallback.")
 
-    account = MyPlexAccount(username, password)
-    plex = account.resource(server_name).connect()
+    account = MyPlexAccount(auth.username, auth.password)
+    plex = account.resource(auth.server_name).connect()
     print("Connected using username/password fallback.")
     return plex
 
@@ -146,7 +155,7 @@ def probe_stream(plex, stream: dict[str, Any]) -> None:
                 f"bytes={len(response.content)} lrc_entries={parse_count(text)}"
             )
         except Exception as exc:
-            print(f"    GET {label:<10} ERROR {type(exc).__name__}: {exc}")
+            print(f"    GET {label:<10} ERROR {type(exc).__name__}: {REDACT(exc)}")
 
 
 def dedupe(streams: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -189,7 +198,7 @@ def main() -> int:
             streams.append(info)
             print(f"  {info}")
     except Exception as exc:
-        print(f"  ERROR {type(exc).__name__}: {exc}")
+        print(f"  ERROR {type(exc).__name__}: {REDACT(exc)}")
 
     metadata_key = getattr(sess, "key", None) or f"/library/metadata/{getattr(sess, 'ratingKey', '')}"
     print("\nFull metadata lyric streams:")
@@ -201,7 +210,7 @@ def main() -> int:
             streams.append(info)
             print(f"  {info}")
     except Exception as exc:
-        print(f"  ERROR {type(exc).__name__}: {exc}")
+        print(f"  ERROR {type(exc).__name__}: {REDACT(exc)}")
 
     candidates = [s for s in dedupe(streams) if s.get("timed")]
     print(f"\nTimed candidates to fetch: {len(candidates)}")
@@ -223,5 +232,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         raise SystemExit(130)
     except Exception as exc:
-        print(f"Fatal: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"Fatal: {type(exc).__name__}: {REDACT(exc)}", file=sys.stderr)
         raise SystemExit(1)

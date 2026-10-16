@@ -1,7 +1,7 @@
 {
   "name": "The Ember Deck",
   "summary": "A Raspberry Pi 5-powered cyberpunk media system built into a vintage TV and radio.",
-  "status": "paused",
+  "status": "maintained",
   "type": "software-hardware",
   "tags": [
     "Integrated System",
@@ -9,7 +9,7 @@
   ],
   "image": "Images/Top Right Final.jpg",
   "content": "docs/awoo.md",
-  "licence": "ERROR",
-  "licenceLink": "ERROR",
-  "licenceLinkText": "ERROR"
+  "licence": "Awoo Licence v2.0",
+  "licenceLink": "https://awoo.ltd/licence/",
+  "licenceLinkText": "Awoo Licence v2.0"
 }

@@ -4,7 +4,14 @@
 
 This is the operator reference for the files in `EmberEngine/configs`. Values are read when a worker starts; unless a row explicitly says otherwise, restart `emberdeck.service` after changing it. Foundry supplies each worker's file through `CONFIG_PATH`.
 
-YAML is type-sensitive. Do not quote numbers or `true`/`false`. Pawprint and Minstrel reject malformed values at startup with an option-specific message. Keep a backup before changing physical calibration.
+YAML is type-sensitive. Do not quote numbers or `true`/`false`. Every Foundry worker except Whisper rejects unknown options and malformed values at startup with an option-specific message (exit status 2, which restarts the worker group), so check edited files before restarting:
+
+```bash
+cd ~/EmberDeck
+.venv/bin/python runtime_config.py configs
+```
+
+Add `--require-secrets` to also check Minstrel's Plex identity and login. Whisper and the Ember UI are only checked by this command; at runtime they stay lenient. Keep a backup before changing physical calibration.
 
 ## Pawprint: physical I/O and routing
 
@@ -92,15 +99,31 @@ GPIO numbers and selector maps are intentionally fixed ownership data in `pawpri
 
 ## Minstrel: Plex/Plexamp
 
-`minstrel.yaml` contains no real credentials in the repository. Values may be placed in the deployed file (protect it with mode `0600`) or injected through the environment names shown below.
+`minstrel.yaml` holds non-secret settings only. The Plex username, password and the refreshed server URL/token live in the gitignored `configs/minstrel_secrets.yaml` (copy `minstrel_secrets.example.yaml`, then `chmod 600`), or in `EMBERDECK_PLEX_*` environment values. Minstrel never writes `minstrel.yaml`.
+
+```yaml
+# configs/minstrel_secrets.yaml (mode 0600, never committed)
+version: 1
+credentials:        # yours; Minstrel never rewrites this section
+  username: you@example.com
+  password: ...
+cache:              # Minstrel's; rewritten atomically after each account login
+  url: null
+  token: null
+```
+
+Precedence: `EMBERDECK_PLEX_USERNAME`/`_PASSWORD` → secrets `credentials` → legacy values still in `minstrel.yaml` (honoured but reported). The direct `url`+`token` pair: `EMBERDECK_PLEX_URL`/`_TOKEN` → secrets `cache` → legacy YAML. A token is only tried first for a fast start; if it fails and credentials exist, Minstrel logs in with the username and password, saves the fresh token to `cache`, and carries on. Environment values are never written to the file.
+
+A valid configuration without Plex identity or credentials does not stop Minstrel: it runs **unconfigured** (Plex shown as stopped, one actionable error, rechecked every 30 s). Wrong credentials or an unreachable server are retried with backoff. Only malformed `minstrel.yaml` stops it.
 
 | Option | Type / units | Default | Purpose and guidance |
 |:--|:--|:--|:--|
 | `proc_name` | string | `minstrel` | Heartbeat/log identity. |
-| `server_name` | string/null | null | Plex resource name for account-login recovery. Env: `EMBERDECK_PLEX_SERVER_NAME`. |
-| `username`, `password` | string/null | null | Plex account fallback credentials. Env: `EMBERDECK_PLEX_USERNAME`, `EMBERDECK_PLEX_PASSWORD`. |
-| `url`, `token` | string/null | null | Cached direct server connection. Env: `EMBERDECK_PLEX_URL`, `EMBERDECK_PLEX_TOKEN`. Supply both or neither. |
-| `plex_client_name` | string, required | null | Exact `player.title` for this Deck's Plexamp. Prevents another household session from claiming physical controls. Env: `EMBERDECK_PLEX_CLIENT_NAME`. |
+| `server_name` | string/null | null | Plex resource name used for username/password login. Env: `EMBERDECK_PLEX_SERVER_NAME`. |
+| `secrets_path` | path | `minstrel_secrets.yaml` | Credentials/cache file, relative to the directory holding `minstrel.yaml` unless absolute. |
+| `plex_retry_initial_s`, `plex_retry_max_s` | seconds 0.5–3600 | `2.0`, `300.0` | Connection/login retry backoff: doubles from the initial value to the maximum, and resets after a successful session query. |
+| `username`, `password`, `url`, `token` | string/null | absent | **Legacy.** Still accepted here for existing installs, but reported as a fault; move them to `minstrel_secrets.yaml`. |
+| `plex_client_name` | string | null | Required for Plex to be configured: exact `player.title` for this Deck's Plexamp. Prevents another household session from claiming physical controls. Env: `EMBERDECK_PLEX_CLIENT_NAME`. |
 | `plex_control_client_name` | string/null | null | Optional separate control client title; defaults to `plex_client_name`. Env: `EMBERDECK_PLEX_CONTROL_CLIENT_NAME`. |
 | `plex_control_client_machine_identifier` | string/null | null | Strongest optional control-client identity. Env: `EMBERDECK_PLEX_CONTROL_CLIENT_ID`. |
 | `poll_interval_s` | seconds | `1.0` | Plex session polling. Lower is more responsive but increases server traffic. |
@@ -112,9 +135,10 @@ GPIO numbers and selector maps are intentionally fixed ownership data in `pawpri
 | `clock_offset_change_epsilon_s` | seconds | `0.001` | Minimum correction change worth applying. |
 | `album_art_enabled` | boolean | `true` | Enables 48×48 shared-memory artwork. |
 | `album_art_width`, `album_art_height` | pixels 12–48 | `48` | Requested Plex transcode size. Shared bus remains a fixed 48×48 canvas. |
-| `album_art_timeout_s` | seconds | `5.0` | Cover download timeout. |
+| `album_art_timeout_s` | seconds | `5.0` | Cover download timeout (also used for the public artwork lookup). |
+| `public_artwork_lookup` | boolean | `false` | For Discord Rich Presence artwork (`artwork_mode: on`): on each new album, check whether the selected album poster is an original public https URL supplied by a metadata agent and publish it. One extra Plex request per new album; server-stored artwork, server URLs and tokens are never published. The existing cover download is unchanged. |
 
-Minstrel may persist a refreshed `url` and `token` into its YAML. Keep the deployed file private and outside source control.
+`/plex/connection_state` reports the outcome (0 unconfigured, 1 connecting, 2 connected, 3 unavailable, 4 credentials rejected); Pawprint routes transport keys to Plex only while it is 2.
 
 ## Echo: audio capture
 
@@ -204,6 +228,7 @@ Minstrel may persist a refreshed `url` and `token` into its YAML. Keep the deplo
 | `labwc_rc_path` | path | `~/.config/labwc/rc.xml` | Labwc configuration edited in place. Back it up before first run. |
 | `labwc_hdmi2_output` | connector | `HDMI-A-2` | Output receiving guest applications. Verify with `wlr-randr`. |
 | `labwc_path` | executable | `labwc` | Used for live reconfiguration. |
+| `heartbeat_s` | seconds | `1.0` (code default) | Heartbeat interval, floored at 0.25 s. Not in the shipped YAML; normally left unset. |
 
 ## MPRIS bridge
 
@@ -223,6 +248,7 @@ Minstrel may persist a refreshed `url` and `token` into its YAML. Keep the deplo
 | `art_width`, `art_height` | pixels 12–48 | `48` | Rendered image inside the fixed 48×48 canvas. |
 | `art_timeout_s` | seconds | `4.0` | HTTP artwork timeout. |
 | `art_max_bytes` | bytes | `2,000,000` | Maximum local/HTTP artwork payload before rejection. |
+| `heartbeat_s` | seconds | `1.0` (code default) | Heartbeat interval, floored at 0.25 s. Not in the shipped YAML; normally left unset. |
 
 ## Ember UI
 
@@ -245,6 +271,20 @@ Minstrel may persist a refreshed `url` and `token` into its YAML. Keep the deplo
 
 Several lower-frequency page rates (`global_refresh_hz`, `now_refresh_hz`, `info_refresh_hz`, `console_refresh_hz`, `palette_refresh_hz`) are supported by the UI with defaults `2`, `2`, `1`, `2`, and `2` Hz. Add them only when tuning is needed.
 
+## Discord Rich Presence and hosted artwork (optional)
+
+`rich_presence.yaml` (Discord Rich Presence) and `artwork_service.yaml` (the local origin for Plex album covers in Discord) are both disabled in the shipped files. Every option, with defaults, valid values and safe examples, is documented in one place: **[Enabling Discord Rich Presence](ENABLING_DISCORD_RICH_PRESENCE.md#configuration)**. Minstrel's related `public_artwork_lookup` option is in the Minstrel table above.
+
+Both workers use `restart_scope="worker"`: their failures restart only themselves. Discord tokens live only in `discord_secrets.yaml`, written by the Deck; `EMBERDECK_*` environment overrides do not apply.
+
+## Local overrides (`<name>.local.yaml`)
+
+`minstrel.yaml`, `rich_presence.yaml` and `artwork_service.yaml` are shipped as portable templates without personal values. Put this Deck's own public values (Plex names, the Discord application ID, the artwork hostname, local paths, preferences) in `configs/<name>.local.yaml` beside the template, for example `configs/rich_presence.local.yaml`. It is merged on top of the template when the worker starts and when `runtime_config.py configs` runs: nested sections key by key, so it needs only the options you change.
+
+- Overlays are gitignored, so updates never overwrite them; copy them when moving to a new checkout or Deck.
+- They are personal, not secret. Credentials still belong only in `*_secrets.yaml`.
+- An overlay must be a YAML mapping. Like the template, it is validated strictly, and errors name the file without quoting its contents.
+
 ## Whisper logging
 
 | Option | Type / units | Current | Purpose |
@@ -259,6 +299,7 @@ Several lower-frequency page rates (`global_refresh_hz`, `now_refresh_hz`, `info
 | `reaction_max_per_event` | count | `2` | Maximum generated reactions per event. |
 | `reaction_global_cooldown_s`, `reaction_process_cooldown_s` | seconds | `5`, `15` | Reaction rate limits. |
 | `structured_log_path`, `ui_event_limit` | path / records | see YAML / `100` | Rewritten bounded UI event snapshot. |
+| `ui_snapshot_interval_s` | seconds | `1.0` | Minimum interval between snapshot rewrites while new records are pending. Critical events and shutdown flush immediately; durable error history is unaffected. |
 | `important_log_path` | path | `logs/foundry-errors.jsonl` | Base name for durable monthly error files. |
 | `important_log_max_priority` | integer | `0` | Highest numeric priority retained durably; 0 means critical only. |
 | `important_log_max_bytes_mb` | MiB | `10` | Per-file rollover ceiling. |
@@ -268,6 +309,18 @@ Several lower-frequency page rates (`global_refresh_hz`, `now_refresh_hz`, `info
 | `critical_visible_s`, `lifecycle_visible_s`, `interaction_visible_s`, `reaction_visible_s`, `ambient_visible_s` | seconds | `12`, `6`, `4`, `3`, `0` | UI persistence hints by message class. |
 
 Whisper also honours `WHISPER_COLOUR=1` for forced Rich colour output. Foundry sets its private queue-connection environment automatically.
+
+## Retired options
+
+These names are still accepted so an older deployed file does not stop its worker. They can be deleted:
+
+| File | Retired option | Behaviour |
+|:--|:--|:--|
+| `foxfire.yaml` | `reducer`, `tilt_pow` | Ignored. Use `reducer_hi` and `tilt_power`. |
+| `aurora.yaml` | `value`, `alpha` | Ignored. |
+| `aurora.yaml` | `saturation`, `base_hue` (degrees) | Used only when `static_base_saturation` or `fallback_hue` is absent. Prefer the new names. |
+| `artwork_service.yaml` | `retention_days` | Ignored; covers no longer expire by age (see `max_cache_mb`). |
+| `minstrel.yaml` | `username`, `password`, `url`, `token` | Still honoured but reported as a fault; move them to `minstrel_secrets.yaml`. |
 
 ## Foundry supervision
 
@@ -279,7 +332,9 @@ Foundry supervision is intentionally code-owned rather than YAML-configured:
 | `WARMUP_GRACE_S` | 30 s | Health checks ignored after each spawn. |
 | `FAIL_CONSEC_N` | 30 checks | Consecutive stale checks before restart. |
 | `INTER_START_DELAY_S` | 5 s | Delay between ordered worker starts. |
-| restart backoff | 5 s → 15 s cap | Delay before group recovery. |
+| `RESTART_BACKOFF_INITIAL_S`, `RESTART_BACKOFF_CAP_S` | 5 s → 60 s | Group restart delay, doubling per restart. |
+| `WORKER_BACKOFF_INITIAL_S`, `WORKER_BACKOFF_CAP_S` | 5 s → 300 s | Delay before respawning a worker-scoped worker. |
+| `BACKOFF_RESET_HEALTHY_S` | 300 s | Continuous post-warm-up health needed before a backoff returns to its initial delay. |
 | `CHILD_TERM_GRACE_S` | 5 s | Graceful stop before force-kill. |
 
-Foundry restarts the complete worker group when one member exits or remains unhealthy. This preserves the appliance's shared ownership boundary; do not run a second standalone Pawprint while the group is active.
+Each `WORKERS` entry has a `restart_scope`. The default, `"group"`, used by every hardware and media worker, restarts the complete worker group when that member exits or remains unhealthy, preserving the appliance's shared ownership boundary; do not run a second standalone Pawprint while the group is active. `"worker"` restarts only that worker; it is used by the optional `artwork_service` and `rich_presence` workers, which own no hardware.

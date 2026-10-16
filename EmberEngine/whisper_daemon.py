@@ -16,6 +16,7 @@ import signal
 import sys
 import time
 import uuid
+import multiprocessing
 from multiprocessing.managers import BaseManager
 from typing import Any
 
@@ -84,6 +85,12 @@ def print_rendered(rendered: RenderedMessage) -> None:
 QUEUE = None
 QUEUE_CONNECT_ATTEMPTED = False
 
+# Liveness lives in Synapse. Heartbeat *log* messages only feed Whisper's
+# ambient personality pool, which keeps one pending line per process and
+# releases one every 60-150 s, so one offer per process per minute is plenty.
+AMBIENT_HEARTBEAT_INTERVAL_S = 60.0
+_last_ambient_heartbeat: dict[str, float] = {}
+
 DEFAULTS = {
     "proc_name": "whisper_daemon",
     "fps": 10.0,
@@ -100,6 +107,9 @@ DEFAULTS = {
     "reaction_process_cooldown_s": 15.0,
     "structured_log_path": "logs/foundry.structured.jsonl",
     "ui_event_limit": 100,
+    # The UI snapshot is rewritten at most this often while dirty (critical
+    # events and shutdown flush at once). Durable error history is unaffected.
+    "ui_snapshot_interval_s": 1.0,
     "important_log_path": "logs/foundry-errors.jsonl",
     "important_log_max_priority": 0,
     "important_log_max_bytes_mb": 10.0,
@@ -193,12 +203,25 @@ def _queue_put(item: Any) -> bool:
         return False
 
 
-def _connect_queue_from_env() -> None:
-    """Handle the connect queue from env lifecycle step."""
-    global QUEUE, QUEUE_CONNECT_ATTEMPTED
-    if QUEUE is not None or QUEUE_CONNECT_ATTEMPTED:
+QUEUE_RETRY_INTERVAL_S = 1.0
+_next_connect_at = 0.0
+
+
+def _connect_queue_from_env(*, retry: bool = False) -> None:
+    """Connect to Foundry's queue, retrying at most once per QUEUE_RETRY_INTERVAL_S.
+
+    ``retry=True`` skips the rate limit (Whisper schedules its own retries).
+    A failed ``put`` clears QUEUE_CONNECT_ATTEMPTED so the next message tries
+    at once, which is how workers find a manager Foundry has restored.
+    """
+    global QUEUE, QUEUE_CONNECT_ATTEMPTED, _next_connect_at
+    if QUEUE is not None:
+        return
+    now = time.monotonic()
+    if QUEUE_CONNECT_ATTEMPTED and not retry and now < _next_connect_at:
         return
     QUEUE_CONNECT_ATTEMPTED = True
+    _next_connect_at = now + QUEUE_RETRY_INTERVAL_S
     host = os.environ.get("WHISPER_MANAGER_HOST")
     port = os.environ.get("WHISPER_MANAGER_PORT")
     auth = os.environ.get("WHISPER_MANAGER_AUTH")
@@ -214,7 +237,7 @@ def _connect_queue_from_env() -> None:
         client = QueueClient(address=(host, int(port)), authkey=bytes.fromhex(auth))
         client.connect()
         QUEUE = client.get_queue()
-    except (OSError, ValueError):
+    except (OSError, ValueError, EOFError, multiprocessing.AuthenticationError):
         QUEUE = None
 
 
@@ -229,6 +252,12 @@ def publish(message: SpiritMessage) -> None:
     _connect_queue_from_env()
     if _queue_put(message.to_wire()):
         return
+    # A failed put resets the proxy. If Foundry has already restored its
+    # manager, one reconnect delivers this message instead of losing it.
+    if QUEUE is None and not QUEUE_CONNECT_ATTEMPTED:
+        _connect_queue_from_env()
+        if _queue_put(message.to_wire()):
+            return
     print_rendered(render_message(message))
 
 
@@ -338,8 +367,17 @@ def log_media(process: str, media_event: str, metadata: dict | None = None) -> N
     ))
 
 
-def log_heartbeat(process: str) -> None:
-    """Handle the log heartbeat lifecycle step."""
+def log_heartbeat(process: str, *, now: float | None = None) -> None:
+    """Offer an ambient heartbeat line, at most once per AMBIENT_HEARTBEAT_INTERVAL_S.
+
+    Workers call this from their Synapse heartbeat (about 1 Hz); almost every
+    call is dropped here, in the worker, before any IPC happens.
+    """
+    now = time.monotonic() if now is None else now
+    last = _last_ambient_heartbeat.get(process)
+    if last is not None and now - last < AMBIENT_HEARTBEAT_INTERVAL_S:
+        return
+    _last_ambient_heartbeat[process] = now
     publish(SpiritMessage(
         priority=PRIORITY_AMBIENT,
         kind="ambient",
@@ -374,11 +412,8 @@ def schedule_reaction(
 
 
 def foundry_heartbeat(proc_name: str) -> None:
-    """Handle the foundry heartbeat lifecycle step."""
-    now_ms = int(time.monotonic() * 1000)
-    bus.set_int(f"/proc/{proc_name}/heartbeat_ms", now_ms)
-    seq_key = f"/proc/{proc_name}/hb_seq"
-    bus.set_int(seq_key, bus.get_int(seq_key, 0) + 1)
+    """Publish Whisper's own liveness (Whisper never logs its heartbeat)."""
+    bus.publish_heartbeat(proc_name)
 
 
 class WhisperScheduler:
@@ -643,6 +678,10 @@ class EventFileSink:
         self.next_cleanup_at = 0.0
         self.last_write_error: str | None = None
         self.last_error_report_at = 0.0
+        self.snapshot_interval_s = max(0.0, float(cfg.get("ui_snapshot_interval_s", 1.0)))
+        self.snapshot_dirty = False
+        self.last_snapshot_at: float | None = None
+        self.snapshot_writes = 0
 
     def initialize(self) -> None:
         """Create the UI source immediately so the UI never latches onto fallback logs."""
@@ -663,6 +702,7 @@ class EventFileSink:
             for record in self.ui_records:
                 handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
         os.replace(temporary, self.ui_path)
+        self.snapshot_writes += 1
 
     def _monthly_error_path(self, now: datetime) -> Path | None:
         """Return the monthly error path result."""
@@ -707,12 +747,40 @@ class EventFileSink:
             except OSError:
                 continue
 
-    def write(self, rendered: RenderedMessage, priority: int, *, monotonic_now: float) -> None:
-        """Handle the write lifecycle step."""
-        record = rendered.to_record()
+    def flush(self, *, monotonic_now: float, force: bool = False) -> None:
+        """Rewrite the UI snapshot if it is dirty and the throttle allows it."""
+        if not self.snapshot_dirty:
+            return
+        due = (
+            force
+            or self.last_snapshot_at is None
+            or monotonic_now - self.last_snapshot_at >= self.snapshot_interval_s
+        )
+        if not due:
+            return
         try:
-            self.ui_records.append(record)
             self._write_ui_snapshot()
+            self.snapshot_dirty = False
+            self.last_snapshot_at = monotonic_now
+        except OSError as exc:
+            self._report_write_error(exc, monotonic_now)
+
+    def _report_write_error(self, exc: OSError, monotonic_now: float) -> None:
+        # Logging must never take down a hardware worker or the UI service.
+        self.last_write_error = repr(exc)
+        if monotonic_now - self.last_error_report_at >= 60.0:
+            print(f"[whisper] event file write failed: {exc}", file=sys.stderr, flush=True)
+            self.last_error_report_at = monotonic_now
+
+    def write(self, rendered: RenderedMessage, priority: int, *, monotonic_now: float) -> None:
+        """Record one rendered message: durable at once if critical, UI snapshot throttled."""
+        record = rendered.to_record()
+        self.ui_records.append(record)
+        self.snapshot_dirty = True
+        # Critical events reach the panel immediately; everything else waits
+        # for the next throttled flush (Whisper calls flush() every tick).
+        self.flush(monotonic_now=monotonic_now, force=priority <= PRIORITY_CRITICAL)
+        try:
             wall_now = datetime.now(timezone.utc)
             if priority <= self.max_priority:
                 self._append_important(record, wall_now)
@@ -720,11 +788,7 @@ class EventFileSink:
                 self.cleanup(now=wall_now)
                 self.next_cleanup_at = monotonic_now + self.cleanup_interval
         except OSError as exc:
-            # Logging must never take down a hardware worker or the UI service.
-            self.last_write_error = repr(exc)
-            if monotonic_now - self.last_error_report_at >= 60.0:
-                print(f"[whisper] event file write failed: {exc}", file=sys.stderr, flush=True)
-                self.last_error_report_at = monotonic_now
+            self._report_write_error(exc, monotonic_now)
 
 
 def _coerce_message(item: Any) -> SpiritMessage | None:
@@ -751,14 +815,18 @@ def main() -> None:
     event_files = EventFileSink(cfg, Path(__file__).resolve().parent)
     event_files.initialize()
 
+    heartbeat = bus.Heartbeat(proc_name)
     _connect_queue_from_env()
     while QUEUE is None:
-        foundry_heartbeat(proc_name)
+        heartbeat.tick()
         time.sleep(1.0 / fps)
-        _connect_queue_from_env()
+        # Without retry the first refused connection would leave Whisper
+        # heartbeating forever while consuming nothing.
+        _connect_queue_from_env(retry=True)
 
     scheduler = WhisperScheduler(cfg)
     stopping = False
+    next_reconnect_at = 0.0
 
     def on_stop(signum, frame):
         """Mark the component for an orderly shutdown."""
@@ -768,23 +836,29 @@ def main() -> None:
     signal.signal(signal.SIGINT, on_stop)
     signal.signal(signal.SIGTERM, on_stop)
     log_info(proc_name, "started")
-    last_foundry_hb = 0.0
 
     while not stopping:
         now = time.monotonic()
-        if now - last_foundry_hb >= 1.0:
-            foundry_heartbeat(proc_name)
-            last_foundry_hb = now
+        heartbeat.tick(now)
 
-        try:
-            while True:
-                message = _coerce_message(QUEUE.get_nowait())
-                if message is not None:
-                    scheduler.enqueue(message, now=now)
-        except queue.Empty:
-            pass
-        except (BrokenPipeError, ConnectionError, EOFError, OSError):
-            break
+        if QUEUE is None and now >= next_reconnect_at:
+            # Foundry restores a dead manager on the same address; keep
+            # rendering what is already scheduled and reconnect when it is back.
+            _connect_queue_from_env(retry=True)
+            next_reconnect_at = now + 1.0
+        if QUEUE is not None:
+            try:
+                while True:
+                    message = _coerce_message(QUEUE.get_nowait())
+                    if message is not None:
+                        scheduler.enqueue(message, now=now)
+            except queue.Empty:
+                pass
+            except (BrokenPipeError, ConnectionError, EOFError, OSError):
+                # Losing the queue is not a reason to exit: an exit would
+                # restart every hardware worker just because logging blinked.
+                set_queue(None)
+                next_reconnect_at = now + 1.0
 
         message = scheduler.pop_next(now=now)
         if message is not None:
@@ -796,8 +870,11 @@ def main() -> None:
             )
             print_rendered(rendered)
             event_files.write(rendered, message.priority, monotonic_now=now)
+        event_files.flush(monotonic_now=now)
 
         time.sleep(1.0 / fps)
+
+    event_files.flush(monotonic_now=time.monotonic(), force=True)
 
     # This may be consumed before the manager is stopped, or fall back plainly.
     log_info(proc_name, "stopped")

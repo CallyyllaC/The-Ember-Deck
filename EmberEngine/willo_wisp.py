@@ -28,6 +28,7 @@ import synapse as bus  # shared memory helper
 from blinkstick_rgbw import BlinkstickProRGBW
 
 from whisper_daemon import log_info, log_error, log_event, log_heartbeat
+from runtime_config import ConfigError, require_mapping, validate_willo_wisp
 # ----------------- keys ----------------- #
 
 LED_COUNT_KEY   = "/leds/main/led_count"
@@ -49,9 +50,10 @@ def load_cfg() -> dict[str, Any]:
     cfg = {}
     if p and Path(p).exists():
         with open(p, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
+            cfg = require_mapping("willo_wisp", yaml.safe_load(f))
     out = DEFAULTS.copy()
     out.update(cfg)
+    validate_willo_wisp(out)
     return out
 
 # ----------------- RGBA -> RGBW ----------------- #
@@ -88,29 +90,27 @@ def rgba_to_rgbw(rgba: np.ndarray) -> np.ndarray:
 
 # ----------------- led config via Synapse ----------------- #
 
-def wait_for_led_config(proc_name):
+def wait_for_led_config(proc_name, should_stop=lambda: False, heartbeat=None):
     """
     Block until LED_COUNT and FPS appear in Synapse.
-    Returns (led_count, fps).
+    Returns (led_count, fps), or None if a stop was requested first.
+
+    The wait keeps heartbeating so Foundry does not restart the whole group
+    merely because Foxfire has not advertised its strip yet, and it honours
+    SIGTERM instead of waiting for the force-kill.
     """
-    log_info("willo_wisp", "led_waiting")
-    while True:
+    log_info(proc_name, "led_waiting")
+    heartbeat = bus.Heartbeat(proc_name, on_beat=log_heartbeat) if heartbeat is None else heartbeat
+    while not should_stop():
         led_count = bus.get_int(LED_COUNT_KEY, 0)
         fps       = bus.get_float(LED_FPS_KEY, 0.0)
 
         if led_count > 0 and fps > 0.0:
             return led_count, fps
 
+        heartbeat.tick()
         time.sleep(0.1)
-
-def heartbeat(proc_name: str):
-    """Publish heartbeat for FoundryCore."""
-    now_ms = int(time.monotonic() * 1000)
-    bus.set_int(f"/proc/{proc_name}/heartbeat_ms", now_ms)
-    seq_key = f"/proc/{proc_name}/hb_seq"
-    bus.set_int(seq_key, bus.get_int(seq_key, 0) + 1)
-    log_heartbeat(proc_name)
-
+    return None
 
 # ----------------- main loop ----------------- #
 
@@ -131,9 +131,13 @@ def main():
     signal.signal(signal.SIGTERM, on_stop)
 
     strip = None
+    heartbeat = bus.Heartbeat(proc_name, on_beat=log_heartbeat)
 
     try:
-        led_count, fps = wait_for_led_config(proc_name)
+        led_config = wait_for_led_config(proc_name, lambda: stopping, heartbeat)
+        if led_config is None:
+            return
+        led_count, fps = led_config
 
         pixel_max_ma = float(cfg.get("pixel_max_ma", 50.0))
         usb_ma       = float(cfg.get("usb_current_ma", 400.0))
@@ -151,8 +155,7 @@ def main():
             pixel_max_ma=pixel_max_ma,
             data_channel=data_channel,
         )
-        connected = False;
-        tmp_hb = 0.0
+        connected = False
         connection_fault_active = False
         while not connected and not stopping:
             time.sleep(1)
@@ -167,12 +170,7 @@ def main():
             connection_fault_active = not connected
             bus.set_int("/io/health/led_strip_ok", int(connected))
             time.sleep(1)
-            
-            # heartbeat once per second
-            now = time.monotonic()
-            if now - tmp_hb > 1.0:
-                heartbeat(proc_name)
-                tmp_hb = now
+            heartbeat.tick()
         if stopping:
             return
 
@@ -189,11 +187,13 @@ def main():
 
         frame_len = led_count * 4
         frame_interval = 1.0 / fps
-        last_hb = 0.0
 
         while not stopping:
             t0 = time.monotonic()
 
+            # Heartbeat before any "no frame yet" skip below; otherwise a
+            # missing Foxfire frame would starve the heartbeat and restart the group.
+            heartbeat.tick(t0)
 
             # get RGBA frame from synapse
             arr = bus.try_get_array(LED_FRAME_KEY, length=frame_len, dtype="f32")
@@ -228,21 +228,14 @@ def main():
                         connected = strip.connect()
                     except Exception:
                         connected = False
-                    reconnect_now = time.monotonic()
-                    if reconnect_now - last_hb > 1.0:
-                        heartbeat(proc_name)
-                        last_hb = reconnect_now
+                    heartbeat.tick()
                 bus.set_int("/io/health/led_strip_ok", int(connected))
                 if stopping:
                     break
                 log_event(proc_name, "led_reconnected", {"data_channel": data_channel})
 
-            # heartbeat once per second
             now = time.monotonic()
-            if now - last_hb > 1.0:
-                heartbeat(proc_name)
-                last_hb = now
-                
+
             # frame pacing – you can also just rely on strip.wait_for_next_frame()
             elapsed = now - t0
             sleep_for = frame_interval - elapsed
@@ -265,4 +258,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ConfigError as exc:
+        print(str(exc), file=sys.stderr, flush=True)
+        raise SystemExit(2) from None

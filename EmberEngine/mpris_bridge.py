@@ -19,6 +19,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -30,7 +31,16 @@ import numpy as np
 import yaml
 
 import synapse as bus
+from contracts import (
+    HDMI2_SOURCE_PLEX,
+    HDMI2_SOURCE_RADIO,
+    HDMI2_SOURCE_YOUTUBE,
+    PLAY_PAUSED,
+    PLAY_PLAYING,
+    PLAY_STOPPED,
+)
 from whisper_daemon import log_error, log_heartbeat, log_info
+from runtime_config import ConfigError, require_mapping, validate_mpris_bridge
 
 try:  # Artwork remains optional. Playback and metadata must survive without it.
     from PIL import Image, ImageOps
@@ -64,15 +74,7 @@ DEFAULTS = {
     "heartbeat_s": 1.0,
 }
 
-# Shared source controller contract.
-HDMI2_SOURCE_PLEX = 1
-HDMI2_SOURCE_RADIO = 2
-HDMI2_SOURCE_YOUTUBE = 3
 KEY_HDMI2_SELECTED_SOURCE = "/hdmi2/selected_source"
-
-PLAY_STOPPED = 0
-PLAY_PLAYING = 1
-PLAY_PAUSED = 2
 
 TEXT_DEFAULT = "N/A"
 ART_WIDTH = 48
@@ -103,6 +105,8 @@ KEY_ART_SEQ = "/mpris/art_seq"
 KEY_ART_WIDTH = "/mpris/art_width"
 KEY_ART_HEIGHT = "/mpris/art_height"
 KEY_ART_RGB = "/mpris/art_rgb"
+# Byte width of every /mpris/*_utf8 segment, so readers can use the full field.
+KEY_TEXT_BYTES = "/mpris/text_bytes"
 
 CONTROL_KEYS = {
     "playpause": "/mpris/control/playpause_seq",
@@ -124,20 +128,12 @@ def load_cfg() -> dict:
     path = Path(raw) if raw else Path(__file__).resolve().parent / "configs" / "mpris_bridge.yaml"
     loaded: dict = {}
     if path.is_file():
-        loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        loaded = require_mapping("mpris_bridge", yaml.safe_load(path.read_text(encoding="utf-8")))
     cfg = DEFAULTS.copy()
     cfg.update(loaded)
+    validate_mpris_bridge(cfg)
     cfg["_config_path"] = str(path)
     return cfg
-
-
-def heartbeat(proc_name: str) -> None:
-    """Publish the component heartbeat and diagnostic event."""
-    now_ms = int(time.monotonic() * 1000)
-    bus.set_int(f"/proc/{proc_name}/heartbeat_ms", now_ms)
-    seq_key = f"/proc/{proc_name}/hb_seq"
-    bus.set_int(seq_key, bus.get_int(seq_key, 0) + 1)
-    log_heartbeat(proc_name)
 
 
 def ui_text(value: object) -> str:
@@ -228,7 +224,11 @@ class MprisBridge:
         self.snapshot = Snapshot()
         self.running = True
         self.last_refresh_at = 0.0
-        self.last_heartbeat_at = 0.0
+        self.heartbeat = bus.Heartbeat(
+            self.proc_name,
+            max(0.25, float(cfg.get("heartbeat_s", 1.0))),
+            on_beat=log_heartbeat,
+        )
         self.last_metadata_signature: Optional[Tuple[object, ...]] = None
         self.last_art_url = ""
         self.last_good_seen_at = 0.0
@@ -237,6 +237,7 @@ class MprisBridge:
 
     def _init_bus(self) -> None:
         """Handle the init bus lifecycle step."""
+        bus.set_int(KEY_TEXT_BYTES, self.text_size)
         self._publish(Snapshot())
         for key in CONTROL_KEYS.values():
             bus.set_int(key, bus.get_int(key, 0))
@@ -642,9 +643,7 @@ class MprisBridge:
                 self._publish(self.snapshot)
             self._consume_controls()
             bus.set_int("/io/health/mpris_bridge_ok", 1)
-            if now - self.last_heartbeat_at >= max(0.25, float(self.cfg.get("heartbeat_s", 1.0))):
-                heartbeat(self.proc_name)
-                self.last_heartbeat_at = now
+            self.heartbeat.tick(now)
 
         bus.set_int("/io/health/mpris_bridge_ok", 0)
         log_info(self.proc_name, "stopped")
@@ -670,4 +669,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ConfigError as exc:
+        print(str(exc), file=sys.stderr, flush=True)
+        raise SystemExit(2) from None

@@ -20,11 +20,13 @@ Selector policy:
   moved for some future non-LED purpose.
 
 Writes:
-  /leds/main/frame_rgba  float32[LED_COUNT*4] RGBA frame
+  /leds/main/led_count, /leds/main/fps   once at start, for Will-o'-Wisp
+  /leds/main/frame_rgba                  float32[LED_COUNT*4] RGBA frame
+  /leds/main/{mode,active_mode,active_mode_seq,tape_mode_engaged}  diagnostics
 Heartbeat:
-  /proc/foxfire/heartbeat
+  /proc/<proc_name>/heartbeat_ms and /proc/<proc_name>/hb_seq (synapse.Heartbeat)
 """
-import os, time, math, yaml, numpy as np
+import os, sys, time, math, yaml, numpy as np
 from pathlib import Path
 from typing import Any
 import synapse as bus
@@ -32,6 +34,7 @@ import signal
 import inspect
 
 from whisper_daemon import log_info, log_error, log_event, log_heartbeat
+from runtime_config import ConfigError, require_mapping, validate_foxfire
 
 epsilon=1e-12
 # ---------- defaults ----------
@@ -56,9 +59,9 @@ DEFAULTS = dict(
     release=0.99, attack=0.9, decay=0.999, rise=0.5,
     gamma=2.2,
     fmin_hz=10.0,fmax_hz=None, split_hz=1500.0,
-    reducer="pctl", pctl_hi=90.0,
+    reducer_hi="pctl", pctl_hi=90.0,
     pivot_hz=1000.0,
-    tilt_pow=0.25, tilt_cap=3.0,
+    tilt_power=0.25, tilt_cap=3.0,
     fast_mix=0.25,
 )
 
@@ -69,9 +72,10 @@ def load_cfg() -> dict[str, Any]:
     cfg = {}
     if p and Path(p).exists():
         with open(p, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
+            cfg = require_mapping("foxfire", yaml.safe_load(f))
     out = DEFAULTS.copy()
     out.update(cfg)
+    validate_foxfire(out)
     out["period"] = 1.0 / max(1, int(out["fps"]))
     return out
 
@@ -516,13 +520,6 @@ def apply_quartile_palette(bright_0_to_1, rgba_tl, rgba_tr, rgba_bl, rgba_br, ou
     return rgba
 
 
-def heartbeat(name: str):
-    """Publish the component heartbeat and diagnostic event."""
-    now_ms = int(time.monotonic() * 1000)           # single clock domain
-    bus.set_int(f"/proc/{name}/heartbeat_ms", now_ms)
-    bus.set_int(f"/proc/{name}/hb_seq", bus.get_int(f"/proc/{name}/hb_seq", 0) + 1)
-    log_heartbeat(name)
-
 # ---------- main loop ----------
 def main():
     """Configure and run the component until shutdown."""
@@ -586,7 +583,7 @@ def main():
     last_tape_engaged = None
 
     next_t = time.monotonic()
-    last_hb = 0.0
+    heartbeat = bus.Heartbeat(proc, on_beat=log_heartbeat)
 
     try:
         while not stopping:
@@ -595,9 +592,7 @@ def main():
                 time.sleep(max(0.0, next_t - now))
             next_t += 1.0 / max(1, fps)
 
-            if now - last_hb > 1.0:
-                heartbeat(proc)
-                last_hb = now
+            heartbeat.tick(now)
             
             bus.wait_consistent("/audio/seq", "/audio/seq2")
 
@@ -670,4 +665,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ConfigError as exc:
+        print(str(exc), file=sys.stderr, flush=True)
+        raise SystemExit(2) from None

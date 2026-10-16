@@ -7,7 +7,6 @@ Run from ~/EmberDeck with the worker stack running:
 from __future__ import annotations
 
 import math
-import time
 import numpy as np
 import synapse as bus
 
@@ -32,7 +31,7 @@ def age_s(proc: str) -> str:
     stamp = bus.get_int(f"/proc/{proc}/heartbeat_ms", 0)
     if stamp <= 0:
         return "missing"
-    return f"{(int(time.monotonic()*1000)-stamp)/1000:.1f}s"
+    return f"{bus.elapsed_ms(bus.monotonic_ms(), stamp)/1000:.1f}s"
 
 def main() -> None:
     """Configure and run the component until shutdown."""

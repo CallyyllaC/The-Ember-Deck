@@ -41,8 +41,9 @@ try:
     from textual.widgets import Static
 except ModuleNotFoundError as exc:  # pragma: no cover - only happens before install
     raise SystemExit(
-        "Textual is not installed in this virtual environment. Run: "
-        "source .venv/bin/activate && pip install -r requirements-ui.txt"
+        "Textual is not installed in this virtual environment. Install the UI "
+        "dependencies as described in docs/INSTALLATION.md, for example: "
+        "source .venv/bin/activate && python -m pip install rich textual"
     ) from exc
 
 
@@ -81,14 +82,25 @@ DEFAULTS = {
     "safe_margin_cells": 1,
 }
 
-SOURCE_NONE = 0
-SOURCE_PLEX = 1
-SOURCE_BLUETOOTH = 2
-SOURCE_LOCAL = 3
-
-PLAY_STOPPED = 0
-PLAY_PLAYING = 1
-PLAY_PAUSED = 2
+from contracts import (  # noqa: E402
+    MEDIA_SOURCE_BLUETOOTH as SOURCE_BLUETOOTH,
+    MEDIA_SOURCE_MPRIS as SOURCE_LOCAL,
+    MEDIA_SOURCE_PLEX as SOURCE_PLEX,
+    PLAY_PAUSED,
+    PLAY_PLAYING,
+    PLAY_STOPPED,
+)
+from contracts import (  # noqa: E402
+    DISCORD_STATUS_AUTHORIZING,
+    DISCORD_STATUS_CONNECTED,
+    DISCORD_STATUS_CONNECTING,
+    DISCORD_STATUS_DISABLED,
+    DISCORD_STATUS_ERROR,
+    DISCORD_STATUS_NOT_CONFIGURED,
+    DISCORD_STATUS_NOT_LINKED,
+    DISCORD_STATUS_RECONNECTING,
+    DISCORD_STATUS_SDK_UNAVAILABLE,
+)
 
 TEXT_BUFFER = 192
 # New lyric bus avoids the old 256-byte segment, which cannot safely hold
@@ -189,7 +201,10 @@ def safe_markup(value: object) -> str:
 
 def read_utf8(key: str, length: int = TEXT_BUFFER) -> str:
     """Read a fixed UTF-8 Synapse segment without truth-testing NumPy data."""
-    raw = bus.try_get_array(key, length=length, dtype="u8")
+    try:
+        raw = bus.try_get_array(key, length=length, dtype="u8")
+    except bus.SharedMemoryLayoutError:
+        return "N/A"
     if raw is None:
         return "N/A"
     try:
@@ -199,6 +214,53 @@ def read_utf8(key: str, length: int = TEXT_BUFFER) -> str:
         return _n_a(data.decode("utf-8", errors="replace"))
     except Exception:
         return "N/A"
+
+
+MPRIS_TEXT_BYTES_KEY = "/mpris/text_bytes"
+
+
+def mpris_text_width() -> int:
+    """The bridge's published text segment width (metadata_buffer_bytes)."""
+    width = bus.get_int(MPRIS_TEXT_BYTES_KEY, TEXT_BUFFER)
+    return width if 16 <= width <= 65536 else TEXT_BUFFER
+
+
+def read_mpris_text(key: str) -> str:
+    """Read a whole /mpris/*_utf8 field; the bridge clips on a UTF-8 boundary."""
+    width = mpris_text_width()
+    text = read_utf8(key, width)
+    if text == "N/A" and width != TEXT_BUFFER:
+        # A stale segment narrower than the advertised width reads as N/A;
+        # fall back to the historical 192-byte prefix rather than going blank.
+        return read_utf8(key, TEXT_BUFFER)
+    return text
+
+
+DISCORD_STATUS_TEXT = {
+    DISCORD_STATUS_DISABLED: "Disabled",
+    DISCORD_STATUS_NOT_CONFIGURED: "No Discord app ID",
+    DISCORD_STATUS_SDK_UNAVAILABLE: "Discord SDK unavailable",
+    DISCORD_STATUS_NOT_LINKED: "Discord not linked",
+    DISCORD_STATUS_AUTHORIZING: "Authorising Discord",
+    DISCORD_STATUS_CONNECTING: "Connecting",
+    DISCORD_STATUS_CONNECTED: "Connected",
+    DISCORD_STATUS_RECONNECTING: "Reconnecting",
+    DISCORD_STATUS_ERROR: "Error",
+}
+
+
+def discord_status_lines() -> List[str]:
+    """Rich Presence status for the console diagnostics panel (plain text, no markup).
+
+    Returns nothing when the Rich Presence worker has never published, so the
+    panel is unchanged on a Deck without it. Discord's own authorization page
+    (overlay or browser) handles linking, so no code or link is shown here.
+    Tokens are never published to Synapse, so they cannot appear here.
+    """
+    status = bus.get_int("/discord/status", -1)
+    if status not in DISCORD_STATUS_TEXT:
+        return []
+    return [f"RP    : {DISCORD_STATUS_TEXT[status]}"]
 
 
 def read_lyric_context_utf8() -> Tuple[str, str, str]:
@@ -408,7 +470,7 @@ def state_name(state: int) -> str:
 def source_name(source: int) -> str:
     """Return the source name result."""
     if source == SOURCE_LOCAL:
-        label = read_utf8("/mpris/source_utf8", TEXT_BUFFER).upper()
+        label = read_mpris_text("/mpris/source_utf8").upper()
         if label != "N/A":
             return label
         selected = bus.get_int("/hdmi2/selected_source", 1)
@@ -530,9 +592,9 @@ def source_metadata(source: int) -> dict:
         }
     return {
         "source": SOURCE_LOCAL,
-        "title": read_utf8("/mpris/title_utf8"),
-        "artist": read_utf8("/mpris/artist_utf8"),
-        "album": read_utf8("/mpris/album_utf8"),
+        "title": read_mpris_text("/mpris/title_utf8"),
+        "artist": read_mpris_text("/mpris/artist_utf8"),
+        "album": read_mpris_text("/mpris/album_utf8"),
         "position": bus.get_int("/mpris/position_ms", 0) / 1000.0,
         "duration": bus.get_int("/mpris/duration_ms", 0) / 1000.0,
         "track_number": 0,
@@ -540,7 +602,7 @@ def source_metadata(source: int) -> dict:
         "disc_number": 0,
         "year": "N/A",
         "genre": "N/A",
-        "codec": read_utf8("/mpris/identity_utf8"),
+        "codec": read_mpris_text("/mpris/identity_utf8"),
         "bitrate": "N/A",
         "sample_rate": "N/A",
         "loudness": "N/A",
@@ -551,7 +613,7 @@ def source_metadata(source: int) -> dict:
         "bpm": "N/A",
         "mood": "N/A",
         **extra_defaults,
-        "stream_title": read_utf8("/mpris/player_utf8"),
+        "stream_title": read_mpris_text("/mpris/player_utf8"),
     }
 
 def palette() -> List[Tuple[int, int, int]]:
@@ -1567,7 +1629,7 @@ class EmberUI(App[None]):
 
     def _heartbeats_text(self) -> str:
         """Return the heartbeats text result."""
-        now_ms = int(time.monotonic() * 1000)
+        now_ms = bus.monotonic_ms()
         services = [
             ("I/O", ["pawprint"]),
             ("AUDIO", ["echo"]),
@@ -1583,7 +1645,7 @@ class EmberUI(App[None]):
             ages = []
             for name in names:
                 stamp = bus.get_int(f"/proc/{name}/heartbeat_ms", 0)
-                ages.append((now_ms - stamp) / 1000.0 if stamp else 999.0)
+                ages.append(bus.elapsed_ms(now_ms, stamp) / 1000.0 if stamp else 999.0)
             age = max(ages)
             mark = "●" if age < 3.0 else "◐" if age < 10.0 else "×"
             rows.append((age, label, mark))
@@ -1610,6 +1672,8 @@ class EmberUI(App[None]):
             f"CPU   : {safe_markup(s['cpu'])}%",
             f"RAM   : {safe_markup(s['ram'])}",
             f"TEMP  : {safe_markup(s['temp'])}",
+            *(f"{label}: {safe_markup(marquee_terminal_cells(value, value_width, now=now, step_s=step_s))}"
+              for label, _, value in (line.partition(": ") for line in discord_status_lines())),
         ])
 
     def _controls_text(self) -> str:

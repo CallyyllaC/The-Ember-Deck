@@ -1,12 +1,14 @@
 # Backup and troubleshooting
 
-[← Installation](INSTALLATION.md) · [Project overview](../README.md)
+[← Enabling Discord Rich Presence](ENABLING_DISCORD_RICH_PRESENCE.md) · [Media gallery →](MEDIA.md)
 
-The most useful recovery tool is a known-good system image. Make one after the hardware works and before experimenting with audio routing, desktop services or package upgrades.
+This page covers backing up your Deck and fixing problems with **Ember Deck software**. For hardware faults, wiring, DAC setup, USB devices or Raspberry Pi OS issues, use the documentation for those components. The [installation guide](INSTALLATION.md) covers the hardware and system setup needed to run Ember Deck.
 
 ## Back up the Raspberry Pi
 
-The original build stores images on a separate server over CIFS. Create a protected mount point and supply credentials through a credentials file where possible; avoid placing passwords directly in shell history.
+A working system image is worth keeping before upgrades or configuration changes. The original build saves backups to a separate server over CIFS; change the server and share names to suit your setup.
+
+First mount the destination. Keep SMB credentials in a protected file rather than typing passwords into the command:
 
 ```bash
 sudo mkdir -p /mnt/plexserver
@@ -14,175 +16,163 @@ sudo mount -t cifs //<SERVER>/<SHARE> /mnt/plexserver \
   -o credentials=/root/.smbcredentials,iocharset=utf8,vers=3.0
 ```
 
-Create a compressed image of the card containing the running root filesystem:
+Confirm the SD card device with `lsblk`, then create the compressed image:
 
 ```bash
 sudo dd if=/dev/mmcblk0 bs=4M status=progress \
   | gzip -1 > /mnt/plexserver/emberdeck-$(date +%F).img.gz
-```
-
-Then flush writes and unmount it:
-
-```bash
 sync
 sudo umount /mnt/plexserver
 ```
 
-Confirm the actual card device with `lsblk` before running `dd`. Reversing the input and output or choosing the wrong device can destroy data.
+**Important:** `/dev/mmcblk0` is an example, not a guarantee. Imaging a running filesystem may produce an inconsistent backup; for a reliably restorable full image, shut down and image the card from another system. Never reverse the `dd` input and output devices.
 
-## No sound from Plexamp
-
-First establish which layer has failed:
+For a quick backup before editing software configuration, you can also save `~/EmberDeck/configs/` privately. It may contain Plex and Discord tokens:
 
 ```bash
-lsusb
-aplay -l
-pactl list short sinks
-wpctl status
-pactl info | grep 'Default Sink'
+umask 077
+tar -czf "$HOME/emberdeck-config-backup-$(date +%Y%m%d-%H%M%S).tar.gz" \
+  -C "$HOME/EmberDeck" configs
 ```
 
-- Missing from `lsusb`: investigate power, the hub, cable and USB enumeration.
-- Present in USB but absent from `aplay -l`: investigate `snd_usb_audio`.
-- Present in ALSA but absent from `pactl`: restart or inspect PipeWire and WirePlumber.
-- Present as a sink but silent: set it as the default and confirm Plexamp is routed to it.
+## Start with the service logs
 
-Test outside Plexamp:
+Most Ember Deck software problems can be narrowed down with these commands:
 
 ```bash
-pw-play /usr/share/sounds/alsa/Front_Center.wav
-speaker-test -c2 -twav -D default
+systemctl --user status emberdeck.service --no-pager
+journalctl --user -u emberdeck.service -b -n 100 --no-pager
 ```
 
-The repository’s `ensure_dac.sh` automates this staged diagnosis for the Burr-Brown DAC. Its privileged recovery helper is intentionally separate and should remain narrowly scoped.
-
-## PipeWire service checks
+You can also follow the log as events happen:
 
 ```bash
-systemctl --user status pipewire.service pipewire-pulse.service wireplumber.service
-journalctl --user -u pipewire.service -u pipewire-pulse.service -u wireplumber.service -b
-```
-
-If the DAC is visible to ALSA but no sink is created, restart the user audio stack:
-
-```bash
-systemctl --user restart wireplumber.service pipewire.service pipewire-pulse.service
-```
-
-Avoid relying on a numeric `wpctl` device ID in permanent configuration; IDs can change across boots.
-
-## Worker or runtime failure
-
-Foundry supervises the workers, so inspect the whole runtime rather than starting a second copy of an individual hardware worker. Plexamp is a soft dependency; its failure should leave Pawprint, Bluetooth, MPRIS, and the LEDs running:
-
-```bash
-systemctl --user status emberdeck.service
-journalctl --user -u emberdeck.service -b -n 250
-```
-
-The included compact follower is:
-
-```bash
+cd ~/EmberDeck
 ./emberdeck_log_console.sh
 ```
 
-Do not create separate services for Pawprint, Echo, Minstrel or Whisper. Duplicate Pawprint instances would compete for GPIO and I²C ownership.
+Foundry starts and supervises Ember Deck's workers. **Do not start a second copy of Pawprint or another hardware worker** while the service is running.
 
-Foundry's workers are one recovery unit. Restart them with:
+To restart the Engine:
 
 ```bash
 systemctl --user restart emberdeck.service
 ```
 
-The observer services can be recovered independently without touching GPIO:
+If only the display interface or browser has stopped responding, restart it separately:
 
 ```bash
 systemctl --user restart ember-ui.service
 systemctl --user restart ember-browser.service
 ```
 
-## Physical media key does nothing
+## Configuration problems
 
-Touchscreen control bypasses Pawprint, so first distinguish input, routing and target failure. The quiet `/io/health` counters are more useful than repeatedly pressing buttons while watching a noisy poll log:
+Run the configuration check after changing YAML files or upgrading:
 
 ```bash
 cd ~/EmberDeck
-.venv/bin/python - <<'PY'
-import synapse as s
-for key in (
-    "/io/health/button_event_seq",
-    "/io/health/button_rejected_seq",
-    "/io/health/button_last_code",
-    "/io/health/media_target",
-    "/io/health/media_command_seq",
-    "/io/health/media_command_last_target",
-    "/io/health/media_command_last_code",
-    "/io/health/media_command_last_status",
-    "/plex/control/last_command",
-    "/plex/control/last_ok",
-    "/mpris/control/last_command",
-    "/mpris/control/last_ok",
-):
-    print(f"{key}: {s.get_int(key, -999)}")
-s.close_all()
-PY
+.venv/bin/python runtime_config.py configs
 ```
 
-Button codes are Play 1, Stop 2, Fast-forward 3, Rewind 4 (the separate raw button diagnostic uses Rewind 3, Fast-forward 4, and Eject 5). Target codes are none 0, Plex 1, Bluetooth 2, and MPRIS 3. Dispatch status is 0 no command yet, 1 handed to the selected target, 2 confirmed by the direct Bluetooth call, and -1 rejected/failed. Plex and MPRIS final success is in their own `last_ok` key.
-
-- `button_event_seq` does not change: inspect the BCM pin, pull-up, common ground and contact; Pawprint did not accept an edge.
-- only `button_rejected_seq` changes: the contact did not remain stable for `button_debounce_s`.
-- `media_command_seq` changes: the event was received and routed; inspect the target code and its `last_ok`/journal entry.
-- target is Plex while Plex is playing: this is required even if Bluetooth or MPRIS is also active.
-- Bluetooth status is stale/unavailable: check `bluetoothctl devices Connected` and the system Bluetooth journal. BlueZ calls are timeout-bounded and run off the GPIO polling loop, so BlueZ failure should not stop later GPIO edges.
-
-Relevant journal messages contain `media target`, `media command routed`, `dispatched`, `completed`, `rejected`, or `failed` without logging every poll.
-
-## I²C hardware missing
+To also check the Plex identity and credentials:
 
 ```bash
-i2cdetect -y 1
-groups
+.venv/bin/python runtime_config.py configs --require-secrets
 ```
 
-Expected addresses are `0x48` for ADS1115 and `0x70` for HT16K33. If neither appears, confirm I²C is enabled and inspect SDA, SCL, power and ground. If the devices appear but the service cannot open them, confirm the runtime user belongs to the appropriate groups and has logged in again since membership changed.
+The validator identifies unknown settings, invalid values and missing Plex settings without printing credentials. Remember that YAML distinguishes numbers, strings and booleans. The [configuration reference](CONFIGURATION.md) explains the available settings and their defaults.
 
-## BlinkStick unavailable
+Personal settings belong in the applicable `*.local.yaml` files; credentials belong in the separate `*_secrets.yaml` files. Keep these when updating the installed Deck.
+
+## Plex won't connect
+
+The Deck should continue running when Plex is unavailable. Minstrel retries connections without taking down the other workers.
+
+Check the configuration first:
 
 ```bash
-lsusb
-blinkstick --info
+cd ~/EmberDeck
+.venv/bin/python runtime_config.py configs --require-secrets
 ```
 
-If the controller appears over USB but access is denied, reload the udev rules documented in the installation guide and reconnect it. Older Python packages may also require:
-
-```python
-from collections.abc import Callable
-```
-
-instead of importing `Callable` from `collections`.
-
-## Browser kiosk does not launch
-
-The launcher waits for both the Wayland socket and the local Plexamp page. Check them independently:
+Then inspect the connection state:
 
 ```bash
-echo "$XDG_RUNTIME_DIR"
-echo "$WAYLAND_DISPLAY"
-test -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY:-wayland-0}"
+.venv/bin/python -c "import synapse as s; print(s.get_int('/plex/connection_state', -1)); s.close_all()"
+```
+
+| State | Meaning | Action |
+|:--|:--|:--|
+| `0` | Not configured | Check `server_name`, `plex_client_name` and the credentials in `minstrel_secrets.yaml`. |
+| `1` | Connecting | Minstrel is attempting a connection. |
+| `2` | Connected | Plex is connected; check playback and control routing instead. |
+| `3` | Unavailable | Check Plex server availability and the configured server name. Minstrel retries automatically. |
+| `4` | Authentication failed | Correct the saved credentials; Minstrel will retry. |
+| `-1` | No state published | Check the service journal for Minstrel startup errors. |
+
+Minstrel can replace an expired or rejected token using your saved username and password. If the secrets file is rejected, compare it with `configs/minstrel_secrets.example.yaml` and ensure it is private:
+
+```bash
+chmod 600 ~/EmberDeck/configs/minstrel_secrets.yaml
+```
+
+## Media buttons control the wrong source
+
+Ember Deck deliberately sends each transport command to **one** source, not every connected player. Active Plex playback takes priority, followed by active Bluetooth playback and local players. Paused sources retain control in some circumstances so Play can resume them.
+
+If the touchscreen works but a physical key appears to do nothing, check the service log for `media target`, `media command routed`, `completed`, `rejected` or `failed`. These show whether Pawprint accepted the action and which software player received it.
+
+Plex must report a connected state before Pawprint routes commands to it. If Plex is playing but control goes elsewhere, check [Plex won't connect](#plex-wont-connect) and the configured `plex_client_name`, which must identify this Deck's Plexamp client rather than another household session.
+
+This guide covers **software detection and routing**, not troubleshooting the electrical button, GPIO wiring or controller hardware.
+
+## UI or browser doesn't start
+
+Check the two display services independently:
+
+```bash
+systemctl --user status ember-ui.service ember-browser.service --no-pager
+journalctl --user -u ember-ui.service -u ember-browser.service -b -n 100 --no-pager
+```
+
+The browser waits for the desktop session and Plexamp's local page. You can test the latter with:
+
+```bash
 curl -fsS --max-time 2 http://127.0.0.1:32500 >/dev/null
-command -v firefox
 ```
 
-## Bluetooth cannot connect
+If it is unavailable, check that Plexamp itself is running. For screen, compositor or connector faults, use the Raspberry Pi OS and display documentation.
+
+## Discord Rich Presence isn't working
+
+Rich Presence is optional. A Discord failure should not interrupt playback, controls or LEDs.
+
+Check its configuration and recent messages:
 
 ```bash
-systemctl status bluetooth.service
-bluetoothctl
+cd ~/EmberDeck
+.venv/bin/python runtime_config.py configs
+journalctl --user -u emberdeck.service -b | grep -iE 'rich_presence|discord|artwork_service|artwork_selection'
 ```
 
-Within `bluetoothctl`, verify the adapter is powered, then pair, trust and connect the device. PipeWire also needs the Bluetooth SPA package installed before it can expose the phone as an audio source.
+If the panel shows **Disabled** or **No Discord app ID**, check `configs/rich_presence.local.yaml`. If it shows **Not linked**, complete the one-time account link from the Pi's desktop session. If it reports an unavailable SDK or bridge, follow the build and setup steps in [Enabling Discord Rich Presence](ENABLING_DISCORD_RICH_PRESENCE.md).
 
-## Shared-memory layout error after configuration change
+For missing album covers, hosted artwork and Cloudflare caching, use the [Discord guide's troubleshooting section](ENABLING_DISCORD_RICH_PRESENCE.md#troubleshooting). Keeping those details in one place avoids maintaining two potentially conflicting sets of instructions.
 
-Synapse arrays have fixed shapes and survive worker restarts. If a log says a key is smaller than the current process requires after changing `led_count`, `waveform_samples`, `metadata_buffer_bytes`, or `event_capacity`, stop the user services and reboot. This clears `/dev/shm` without guessing at segment names. Do not delete unrelated shared-memory objects on a live system.
+## Shared-memory error after changing settings
+
+Some Synapse buffers have a fixed size. Changing settings such as `led_count`, `waveform_samples`, `metadata_buffer_bytes` or `event_capacity` can make existing buffers incompatible with the new configuration.
+
+Stop the Deck and reboot to clear the old shared-memory layout:
+
+```bash
+systemctl --user stop emberdeck.service
+sudo reboot
+```
+
+A reboot is safer than manually deleting unrelated objects from `/dev/shm`.
+
+## Reporting a software bug
+
+If the problem persists, include the affected feature, what you expected, what happened, and the relevant **redacted** service-log lines. Never post Plex passwords, access tokens, Discord tokens or personal configuration files publicly.

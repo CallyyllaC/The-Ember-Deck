@@ -13,6 +13,8 @@ permissions:
 
 jobs:
   trigger-awoo-rebuild:
+    # Forks have no deploy hook; only the upstream repository triggers a rebuild.
+    if: github.repository == 'CallyyllaC/The-Ember-Deck'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger awoo.ltd Cloudflare build

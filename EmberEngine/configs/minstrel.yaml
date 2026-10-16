@@ -1,11 +1,16 @@
 proc_name: minstrel
-# Supply these here on the deployed Deck or through EMBERDECK_PLEX_* service
-# environment values. Never commit real credentials or a Plex token.
+# Non-secret Plex settings only. The username, password and the refreshed
+# server URL/token belong in the gitignored minstrel_secrets.yaml next to this
+# file (copy minstrel_secrets.example.yaml, then chmod 600), or in
+# EMBERDECK_PLEX_* service environment values. Never commit credentials here.
+# Until Plex is configured, Minstrel runs in an "unconfigured" state: it stays
+# alive, publishes Plex as stopped and rechecks every 30 s.
+# This Deck's own (non-secret) values, such as server_name and
+# plex_client_name, may go in the gitignored minstrel.local.yaml beside this
+# file, which is merged on top of it.
+
+# Plex Media Server resource name used for username/password login.
 server_name: null
-username: null
-password: null
-url: null
-token: null
 
 # Required: the title of this Deck's own Plexamp client. Without it, another
 # household Plex session could be mistaken for the physical Deck.
@@ -24,3 +29,14 @@ album_art_enabled: true
 album_art_width: 48
 album_art_height: 48
 album_art_timeout_s: 5.0
+# Discord Rich Presence artwork (with rich_presence artwork_mode: on): check
+# whether the album's selected poster is an original public https URL from a
+# metadata agent. Never sends server URLs or tokens. One extra Plex request
+# per new album; Minstrel's own artwork download is unchanged.
+public_artwork_lookup: false
+
+# Credentials/cache file, relative to this directory. Connection and login
+# retries back off from plex_retry_initial_s to plex_retry_max_s.
+secrets_path: minstrel_secrets.yaml
+plex_retry_initial_s: 2.0
+plex_retry_max_s: 300.0

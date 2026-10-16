@@ -1,2 +1,8 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Executed on the Pi (including under Box64): must keep LF line endings.
+*.sh text eol=lf
+*.service text eol=lf
+EmberEngine/system/* text eol=lf
+EmberEngine/discord_bridge/launcher/* text eol=lf

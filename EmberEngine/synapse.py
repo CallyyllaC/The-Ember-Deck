@@ -154,6 +154,72 @@ def set_array(name: str, values, dtype: str = "f32") -> None:
     h.buf[:arr.nbytes] = payload
 
 
+# ---------- Monotonic millisecond stamps ----------
+# Scalars are signed 32-bit. CLOCK_MONOTONIC counts from boot, so a raw
+# ``monotonic() * 1000`` exceeds that range after about 24.8 days of uptime and
+# set_int() raises struct.error. Heartbeats and other ms stamps therefore wrap
+# at 31 bits, and readers compare them with elapsed_ms().
+MS_CLOCK_MASK = 0x7FFFFFFF
+
+
+def monotonic_ms() -> int:
+    """Return a positive 31-bit monotonic millisecond stamp safe for set_int()."""
+    stamp = int(time.monotonic() * 1000) & MS_CLOCK_MASK
+    # Zero is the conventional "never written" value for heartbeat readers.
+    return stamp or 1
+
+
+def elapsed_ms(now_ms: int, then_ms: int) -> int:
+    """Return milliseconds from ``then_ms`` to ``now_ms`` across a 31-bit wrap."""
+    return (int(now_ms) - int(then_ms)) & MS_CLOCK_MASK
+
+
+# ---------- Process liveness ----------
+# Foundry's supervision contract: /proc/<name>/heartbeat_ms holds a 31-bit
+# monotonic_ms() stamp and /proc/<name>/hb_seq advances on every beat.
+
+def publish_heartbeat(name: str) -> int:
+    """Write one heartbeat for ``name`` and return its stamp."""
+    stamp = monotonic_ms()
+    set_int(f"/proc/{name}/heartbeat_ms", stamp)
+    seq_key = f"/proc/{name}/hb_seq"
+    set_int(seq_key, (get_int(seq_key, 0) + 1) & MS_CLOCK_MASK)
+    return stamp
+
+
+class Heartbeat:
+    """Rate-limited heartbeat publisher for one worker's main loop.
+
+    Call ``tick(now)`` every loop iteration (including wait/reconnect loops);
+    it publishes at most once per ``interval_s``. ``on_beat`` runs after each
+    publication for optional side effects such as diagnostic counters.
+    """
+
+    def __init__(self, name: str, interval_s: float = 1.0, *, on_beat=None, publish=None):
+        self.name = str(name)
+        self.interval_s = max(0.05, float(interval_s))
+        self._on_beat = on_beat
+        self._publish = publish if publish is not None else publish_heartbeat
+        self.last_at = None
+
+    @property
+    def next_due(self) -> float:
+        return float("-inf") if self.last_at is None else self.last_at + self.interval_s
+
+    def tick(self, now: float | None = None) -> bool:
+        now = time.monotonic() if now is None else float(now)
+        if self.last_at is not None and now - self.last_at < self.interval_s:
+            return False
+        self.beat(now)
+        return True
+
+    def beat(self, now: float | None = None) -> None:
+        self.last_at = time.monotonic() if now is None else float(now)
+        self._publish(self.name)
+        if self._on_beat is not None:
+            self._on_beat(self.name)
+
+
 # ---------- Frame integrity ----------
 def begin_frame(seq_key: str = "/frame/seq"):
     """Increment and publish a sequence number at frame start."""

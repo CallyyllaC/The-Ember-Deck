@@ -7,21 +7,12 @@ Plex / Plexamp bridge for EmberEngine.
 - Publishes playback state and track info into shared memory via synapse.
 - Intended to run under FoundryCore as a supervised process.
 
-Config (YAML) is loaded from CONFIG_PATH and should look roughly like:
-
-  proc_name: minstrel
-
-  url: null
-  token: null
-  username: null
-  password: null
-
-  # Supply credentials in the deployed file or EMBERDECK_PLEX_* environment.
-
-  # Required exact player.title for this Deck's Plexamp client
-  plex_client_name: "Ember Deck"
-
-  poll_interval_s: 0.5             # how often to query sessions
+Non-secret settings come from CONFIG_PATH (configs/minstrel.yaml), including
+the required ``plex_client_name`` and the ``server_name`` used for account
+login. Credentials and the refreshed URL/token live in the gitignored
+configs/minstrel_secrets.yaml; precedence and refresh rules are in
+plex_auth.py. Missing or rejected credentials never stop the worker: it stays
+alive, heartbeats, publishes Plex as stopped and retries with backoff.
 
 UltraBlur handling is stubbed with a helper you can adapt once you
 know exactly how your server exposes those fields.
@@ -32,7 +23,6 @@ import sys
 import time
 import signal
 import io
-import yaml
 import re
 import numpy as np
 from pathlib import Path
@@ -45,18 +35,17 @@ except ModuleNotFoundError:  # Artwork remains optional until Pillow is installe
     ImageOps = None
 from plexapi.myplex import MyPlexAccount
 from plexapi.server import PlexServer
-from plexapi.exceptions import PlexApiException
 
 import synapse as bus  # shared memory helper
 from whisper_daemon import log_info, log_error, log_media, log_event, log_heartbeat
-from runtime_config import ConfigError, require_mapping, validate_minstrel
+from runtime_config import ConfigError, load_yaml_mapping, validate_minstrel
+from plex_auth import PlexConnector, is_auth_failure, new_redactor
 
 
 # --------------- playback enums & keys ----------------
 
-PLAY_STOPPED = 0
-PLAY_PLAYING = 1
-PLAY_PAUSED  = 2
+from contracts import PLAY_PAUSED, PLAY_PLAYING, PLAY_STOPPED  # noqa: E402
+import artwork_policy  # noqa: E402
 
 KEY_PLAY_STATE     = "/plex/play_state"
 KEY_POSITION_SEC   = "/plex/position_sec"
@@ -114,6 +103,15 @@ KEY_PLEX_LAST_PLAYED_UTF8 = "/plex/last_played_utf8"
 ART_WIDTH = 48
 ART_HEIGHT = 48
 KEY_PLEX_ART_VALID = "/plex/art_valid"
+# Optional (public_artwork_lookup): the selected album poster's original public
+# https URL, only when Plex's metadata already holds one. Never a server URL.
+KEY_PLEX_ART_PUBLIC_URL_UTF8 = "/plex/art_public_url_utf8"
+# Optional (artwork_service.yaml enabled): this Deck's own public URL for the
+# current cover, served by artwork_service.py through a Cloudflare Tunnel.
+KEY_PLEX_ART_HOSTED_URL_UTF8 = "/plex/art_hosted_url_utf8"
+HOSTED_ART_SOURCE_SIZE = 512
+ARTWORK_URL_BYTES = 512
+PUBLIC_ART_CACHE_LIMIT = 64
 KEY_PLEX_ART_SEQ = "/plex/art_seq"
 KEY_PLEX_ART_WIDTH = "/plex/art_width"
 KEY_PLEX_ART_HEIGHT = "/plex/art_height"
@@ -187,147 +185,52 @@ DEFAULTS = dict(
     album_art_width=48,
     album_art_height=48,
     album_art_timeout_s=5.0,
+    # Look up whether the selected album poster is an original public https
+    # URL (for Discord Rich Presence artwork). Off by default: one extra Plex
+    # request per new album; the existing artwork download is unchanged.
+    public_artwork_lookup=False,
+    # Gitignored credentials/cache file, relative to this config's directory.
+    secrets_path="minstrel_secrets.yaml",
+    # Bounded exponential backoff for Plex connection and account login.
+    plex_retry_initial_s=2.0,
+    plex_retry_max_s=300.0,
 )
 
+# Non-secret identity may come from the environment. Credentials and tokens
+# are resolved by plex_auth.resolve_plex_auth, never merged into this dict.
+IDENTITY_ENVIRONMENT = {
+    "EMBERDECK_PLEX_SERVER_NAME": "server_name",
+    "EMBERDECK_PLEX_CLIENT_NAME": "plex_client_name",
+    "EMBERDECK_PLEX_CONTROL_CLIENT_NAME": "plex_control_client_name",
+    "EMBERDECK_PLEX_CONTROL_CLIENT_ID": "plex_control_client_machine_identifier",
+}
+
+KEY_PLEX_CONNECTION_STATE = "/plex/connection_state"
+REDACT = new_redactor()
+
+
 def load_cfg():
-    """Load YAML config for this instance."""
-    p = os.environ.get("CONFIG_PATH")
-    cfg = {}
-    if p and Path(p).exists():
-        with open(p, "r", encoding="utf-8") as f:
-            cfg = require_mapping("minstrel", yaml.safe_load(f))
+    """Load and validate minstrel.yaml; ConfigError means the file is malformed.
+
+    A valid file without Plex identity or credentials is *not* an error: the
+    worker then runs in the unconfigured state.
+    """
+    raw = os.environ.get("CONFIG_PATH")
+    path = Path(raw) if raw else Path(__file__).resolve().parent / "configs" / "minstrel.yaml"
+    loaded = load_yaml_mapping(path, "minstrel") if path.is_file() else {}
     out = DEFAULTS.copy()
-    out.update(cfg)
-    environment_options = {
-        "EMBERDECK_PLEX_SERVER_NAME": "server_name",
-        "EMBERDECK_PLEX_USERNAME": "username",
-        "EMBERDECK_PLEX_PASSWORD": "password",
-        "EMBERDECK_PLEX_URL": "url",
-        "EMBERDECK_PLEX_TOKEN": "token",
-        "EMBERDECK_PLEX_CLIENT_NAME": "plex_client_name",
-        "EMBERDECK_PLEX_CONTROL_CLIENT_NAME": "plex_control_client_name",
-        "EMBERDECK_PLEX_CONTROL_CLIENT_ID": "plex_control_client_machine_identifier",
-    }
-    for environment_name, option_name in environment_options.items():
+    out.update(loaded)
+    for environment_name, option_name in IDENTITY_ENVIRONMENT.items():
         if environment_name in os.environ:
             out[option_name] = os.environ[environment_name]
+    out["_config_path"] = str(path)
+    out["_config_dir"] = str(path.parent)
+    validate_minstrel(out, require_runtime_values=False)
     return out
 
 
-def heartbeat(name: str):
-    """Publish a monotonic-ms heartbeat for FoundryCore."""
-    now_ms = int(time.monotonic() * 1000)
-    bus.set_int(f"/proc/{name}/heartbeat_ms", now_ms)
-    seq_key = f"/proc/{name}/hb_seq"
-    bus.set_int(seq_key, bus.get_int(seq_key, 0) + 1)
-    
+_is_auth_failure = is_auth_failure
 
-
-# --------------- plex helpers ------------------------
-
-def _is_auth_failure(exc: Exception) -> bool:
-    """Return True when Plex rejected the current credentials/token.
-
-    plexapi does not use one consistent exception type for every 401 path, so
-    inspect both an attached HTTP response and the message text.  Network
-    failures deliberately return False: those should retry the saved token,
-    not needlessly force an account login.
-    """
-    response = getattr(exc, "response", None)
-    status_code = getattr(response, "status_code", None)
-    if status_code in (401, 403):
-        return True
-
-    text = str(exc).lower()
-    auth_markers = (
-        "401",
-        "403",
-        "unauthorized",
-        "forbidden",
-        "not authorized",
-        "authentication",
-        "token is invalid",
-        "token invalid",
-    )
-    return any(marker in text for marker in auth_markers)
-
-
-def connect_plex(
-    servername: str,
-    username: str,
-    password: str,
-    token: str,
-    url: str,
-    cfg,
-    *,
-    force_account_login: bool = False,
-):
-    """Connect to Plex, using credentials to refresh an expired saved token.
-
-    Normal path: try the cached ``url`` + ``token`` first.  Once any
-    connection/session attempt fails, the caller sets ``force_account_login``
-    and all recovery attempts use the saved account credentials to obtain a
-    fresh server connection.  The resulting token and
-    URL are persisted, while ``username`` and ``password`` are intentionally
-    left untouched in the YAML for the next refresh.
-    """
-    token_error = None
-    timeout = max(0.5, float(cfg.get("plex_timeout_s", 5.0)))
-
-    if token and url and not force_account_login:
-        try:
-            plex = PlexServer(url, token, timeout=timeout)
-            # Force an authenticated request now. Constructing PlexServer is
-            # lazy, so without this an expired token can look valid until much
-            # later in the polling loop.
-            sections = plex.library.sections()
-            log_event("minstrel", "connected", {
-                "server": plex.friendlyName,
-                "libraries": str([section.title for section in sections]),
-            })
-            return plex, token, url
-        except Exception as exc:
-            token_error = exc
-            log_error("minstrel", "Saved Plex token connection failed; trying account login", str(exc))
-
-    if username and password and servername:
-        try:
-            if force_account_login:
-                log_info("minstrel", "refreshing Plex connection via saved username/password")
-            account = MyPlexAccount(username, password, timeout=timeout)
-            resource = account.resource(servername)
-            if resource is None:
-                raise RuntimeError(f"Plex server resource not found: {servername!r}")
-
-            plex = resource.connect(timeout=timeout)
-            # Confirm the returned connection is usable before overwriting the
-            # cached token. A half-built PlexServer object is not evidence.
-            sections = plex.library.sections()
-
-            fresh_token = plex._token
-            fresh_url = plex._baseurl
-            if not fresh_token or not fresh_url:
-                raise RuntimeError("Account login did not yield a usable server token and URL")
-
-            set_loginInfo(fresh_token, fresh_url, cfg)
-            log_event("minstrel", "connected", {
-                "server": plex.friendlyName,
-                "libraries": str([section.title for section in sections]),
-            })
-            return plex, fresh_token, fresh_url
-        except Exception as exc:
-            if token_error is not None:
-                raise RuntimeError(
-                    f"Saved token failed ({token_error}); account login also failed ({exc})"
-                ) from exc
-            raise
-
-    if token_error is not None:
-        raise RuntimeError(
-            "Saved Plex token failed and no username/password fallback is configured"
-        ) from token_error
-
-    raise RuntimeError("No usable Plex login method is configured")
 
 def find_plexamp_session(server, client_name: str):
     """Return the matching Plexamp session, or None when no player exists.
@@ -756,7 +659,7 @@ def _safe_fetch_track(server, sess):
         if server is not None and rating_key is not None:
             return server.fetchItem(int(rating_key))
     except Exception as exc:
-        print(f"[minstrel] Full track detail unavailable: {exc!r}", flush=True)
+        print(f"[minstrel] Full track detail unavailable: {redact_plex_token(repr(exc))}", flush=True)
     return sess
 
 
@@ -997,25 +900,79 @@ def _album_thumb_key(detail, sess) -> Optional[str]:
     return None
 
 
-def publish_album_art(server, detail, sess, cfg: dict) -> None:
-    """Fetch one small cover image on track change and publish its RGB mosaic.
+_hosted_art_url: Optional[str] = None   # last published hosted URL (None: never published)
 
-    The cover is deliberately transcoded by Plex to a tiny square first. That
-    avoids moving a huge original cover to the Pi and keeps all image work off
-    the UI thread. Pillow is optional: without it the rest of Minstrel runs and
-    the UI falls back to its palette texture.
+
+def publish_hosted_art_url(url: str) -> None:
+    """Publish this Deck's hosted cover URL ("" for none) and advance the metadata sequence."""
+    global _hosted_art_url
+    if url == _hosted_art_url:
+        return
+    _hosted_art_url = url
+    publish_utf8(KEY_PLEX_ART_HOSTED_URL_UTF8, url, ARTWORK_URL_BYTES)
+    bus.set_int(KEY_PLEX_METADATA_SEQ, bus.get_int(KEY_PLEX_METADATA_SEQ, 0) + 1)
+
+
+def open_artwork_cache(cfg: dict, proc_name: str):
+    """The artwork service's cache if artwork_service.yaml enables it, else None.
+
+    Optional and isolated: a missing file means disabled, and a malformed one
+    is reported but never stops Minstrel.
     """
+    try:
+        import artwork_service
+        return artwork_service.cache_for_config_dir(Path(cfg["_config_dir"]))
+    except ConfigError as exc:
+        log_error(proc_name, "Artwork service configuration ignored", str(exc),
+                  event="artwork_service_config_invalid", dedupe_key=f"{proc_name}:artwork_service_config")
+    except Exception as exc:
+        print(f"[minstrel] Artwork cache disabled: {type(exc).__name__}", flush=True)
+    return None
+
+
+def _first_text(detail, sess, attr: str) -> Optional[str]:
+    """The first non-empty text attribute of the full track, then the session."""
+    for item in (detail, sess):
+        value = getattr(item, attr, None) if item is not None else None
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def publish_album_art(server, detail, sess, cfg: dict, artwork_cache=None) -> None:
+    """Fetch one cover image on track change and publish its RGB mosaic.
+
+    The cover is transcoded by Plex to a small square first, which avoids
+    moving a huge original cover to the Pi. Pillow is optional: without it the
+    rest of Minstrel runs and the UI falls back to its palette texture.
+
+    With the artwork service enabled (``artwork_cache``), the same single
+    request asks for a 512 px JPEG instead of the tiny PNG; the UI mosaic is
+    derived from it as before, and the same downloaded bytes go to the
+    persistent artwork cache under the album and album-artist names (converted
+    to PNG only the first time those bytes are seen). Its public URL is
+    published as ``/plex/art_hosted_url_utf8``. No second download happens.
+    """
+    hosted = ""
+    try:
+        hosted = _publish_album_art(server, detail, sess, cfg, artwork_cache)
+    finally:
+        publish_hosted_art_url(hosted)
+
+
+def _publish_album_art(server, detail, sess, cfg: dict, artwork_cache) -> str:
     if not bool(cfg.get("album_art_enabled", True)):
         _clear_album_art()
-        return
+        return ""
     if Image is None or ImageOps is None:
         print("[minstrel] Album art disabled: Pillow is not installed", flush=True)
         _clear_album_art()
-        return
+        return ""
     if server is None:
         _clear_album_art()
-        return
+        return ""
 
+    hosted = ""
     try:
         width = max(12, min(ART_WIDTH, int(cfg.get("album_art_width", ART_WIDTH))))
         height = max(12, min(ART_HEIGHT, int(cfg.get("album_art_height", ART_HEIGHT))))
@@ -1023,16 +980,21 @@ def publish_album_art(server, detail, sess, cfg: dict) -> None:
         thumb_key = _album_thumb_key(detail, sess)
         if not thumb_key:
             _clear_album_art()
-            return
+            return ""
 
         source_url = server.url(thumb_key, includeToken=True)
+        if artwork_cache is not None:
+            fetch_w = fetch_h = HOSTED_ART_SOURCE_SIZE
+            fetch_format = "jpeg"
+        else:
+            fetch_w, fetch_h, fetch_format = width, height, "png"
         image_url = server.transcodeImage(
             source_url,
-            height=height,
-            width=width,
+            height=fetch_h,
+            width=fetch_w,
             minSize=False,
             upscale=True,
-            imageFormat="png",
+            imageFormat=fetch_format,
         )
         response = server._session.get(image_url, timeout=timeout)
         response.raise_for_status()
@@ -1045,6 +1007,16 @@ def publish_album_art(server, detail, sess, cfg: dict) -> None:
                 method=resampling,
             )
             pixels = np.asarray(rgb, dtype=np.uint8)
+            if artwork_cache is not None:
+                try:
+                    hosted = artwork_cache.store_cover(
+                        response.content,
+                        album=_first_text(detail, sess, "parentTitle"),
+                        artist=_first_text(detail, sess, "grandparentTitle"),
+                    ) or ""
+                except Exception as exc:  # the UI artwork must not depend on the cache
+                    print(f"[minstrel] Artwork cache unavailable: {type(exc).__name__}", flush=True)
+                    hosted = ""
 
         # The segment's first writer fixes its size. Always publish the stable
         # 48×48 bus capacity, with dimensions describing the valid top-left
@@ -1058,9 +1030,89 @@ def publish_album_art(server, detail, sess, cfg: dict) -> None:
         bus.set_int(KEY_PLEX_ART_HEIGHT, copy_h)
         bus.set_int(KEY_PLEX_ART_VALID, 1)
         bus.set_int(KEY_PLEX_ART_SEQ, (bus.get_int(KEY_PLEX_ART_SEQ, 0) + 1) & 0x7FFFFFFF)
+        return hosted
     except Exception as exc:
-        print(f"[minstrel] Album art unavailable: {exc!r}", flush=True)
+        print(f"[minstrel] Album art unavailable: {redact_plex_token(repr(exc))}", flush=True)
         _clear_album_art()
+        return ""
+
+def _selected_public_poster(server, album_key: str, timeout: float) -> Optional[str]:
+    """Return the selected poster's own https URL, or None.
+
+    ``/library/metadata/<album>/posters`` lists the album's poster candidates
+    as ``Photo`` elements; ``selected="1"`` marks the one in use. A poster an
+    agent supplied and the server did not copy is referenced by its original
+    remote URL; artwork stored on the server is ``metadata://``, ``media://``
+    or ``upload://`` and has no public address. Only an absolute https
+    reference is returned: nothing is ever built from server paths, names or
+    ``server.url()``.
+    """
+    root = server.query(f"/library/metadata/{album_key}/posters", timeout=timeout)
+    if root is None:
+        return None
+    for photo in root.iter("Photo"):
+        if str(photo.attrib.get("selected", "")).lower() not in ("1", "true"):
+            continue
+        for attr in ("ratingKey", "key"):
+            value = str(photo.attrib.get(attr) or "")
+            if value.startswith("https://"):
+                return value
+        return None  # the selected artwork lives on the server
+    return None
+
+
+def _public_artwork_url(candidate: str, server) -> str:
+    """Vet a candidate with the Rich Presence policy and never allow the server's own host."""
+    from urllib.parse import urlsplit
+
+    url, _reason = artwork_policy.vet_artwork_url(candidate, "plex")
+    if url is None:
+        return ""
+    try:
+        server_host = urlsplit(str(getattr(server, "_baseurl", "") or "")).hostname
+    except ValueError:
+        server_host = None
+    if server_host and urlsplit(url).hostname == server_host.lower():
+        return ""
+    return url
+
+
+def publish_public_album_art(server, detail, sess, cfg: dict, state: dict) -> None:
+    """Publish the album's original public artwork URL, or "" (static artwork).
+
+    Optional (``public_artwork_lookup``). Runs on track change only and is
+    cached per album, so a new album costs one Plex request. Lookup failures
+    publish "" and are retried on the next track change; they never affect
+    playback, metadata or Minstrel's own artwork download. The published value
+    has passed artwork_policy.vet_artwork_url, so Synapse never holds a Plex
+    server URL or token.
+    """
+    url = ""
+    album_key = None
+    if bool(cfg.get("public_artwork_lookup", False)) and server is not None:
+        album_key = getattr(detail, "parentRatingKey", None) or getattr(sess, "parentRatingKey", None)
+    if album_key is not None:
+        cache = state.setdefault("plex_public_art_cache", {})
+        key = str(album_key)
+        if key in cache:
+            url = cache[key]
+        else:
+            try:
+                timeout = max(1.0, float(cfg.get("album_art_timeout_s", 5.0)))
+                url = _public_artwork_url(_selected_public_poster(server, key, timeout) or "", server)
+            except Exception as exc:
+                print(f"[minstrel] Public artwork lookup unavailable: {redact_plex_token(type(exc).__name__)}",
+                      flush=True)
+                url = ""
+            else:
+                if len(cache) >= PUBLIC_ART_CACHE_LIMIT:
+                    cache.clear()
+                cache[key] = url
+    if url != state.get("plex_public_art_url"):  # None at start: always publish once
+        state["plex_public_art_url"] = url
+        publish_utf8(KEY_PLEX_ART_PUBLIC_URL_UTF8, url, ARTWORK_URL_BYTES)
+        bus.set_int(KEY_PLEX_METADATA_SEQ, bus.get_int(KEY_PLEX_METADATA_SEQ, 0) + 1)
+
 
 def publish_basic_state(sess, prev_state):
     """Publish Plex state and return the raw timing observation for the clock."""
@@ -1102,11 +1154,6 @@ def publish_basic_state(sess, prev_state):
     bus.set_int(KEY_TRACK_RK, rk_int)
 
     return rk_int, ps, raw_pos_sec
-
-def set_loginInfo(token, url, cfg):
-    """Persist a refreshed server token without discarding account credentials."""
-    update_config_value("token", token, cfg)
-    update_config_value("url", url, cfg)
 
 def publishTrackInfo(track):
     """Log a track change and refresh artwork colours from the richest object."""
@@ -1151,7 +1198,7 @@ def try_publish_ultrablur(track) -> bool:
         bus.set_int("/album/ultra/valid", 1)
         return True
     except Exception as exc:
-        print(f"[minstrel] UltraBlur unavailable: {exc!r}", flush=True)
+        print(f"[minstrel] UltraBlur unavailable: {redact_plex_token(repr(exc))}", flush=True)
         return False
 
 
@@ -1430,39 +1477,16 @@ def parse_lrc_text(text: str):
     entries.sort(key=lambda x: x[0])
     return entries
 
-def update_config_value(key, value, cfg):
+def redact_plex_token(text: object) -> str:
+    """Remove Plex tokens and Minstrel's known secrets from text bound for logs.
+
+    requests/urllib3 errors quote the full URL, and the artwork transcode URL
+    carries ``X-Plex-Token`` in its query string. The shared redactor also
+    knows the configured password and every token Minstrel has used.
     """
-    Update a single top-level key in Aurora's config file and in-memory cfg.
+    return REDACT(text)
 
-    key      : string key in the YAML (e.g. "base_colour", "dynamicColour")
-    value    : new value to write
-    cfg      : current in-memory config dict
-    cfg_path : optional explicit path; defaults to $CONFIG_PATH
 
-    Returns the updated value.
-    """
-    cfg_path = os.environ.get("CONFIG_PATH")
-    if not cfg_path:
-        return
-
-    # update in-memory view
-    cfg[key] = value
-
-    # load full file so we preserve other keys
-    try:
-        with open(cfg_path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-    except FileNotFoundError:
-        data = {}
-
-    # update on-disk dict
-    data[key] = value
-
-    # write back
-    with open(cfg_path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(data, f, sort_keys=False)
-
-    return value
 def _status_note(proc_name: str, message: str) -> None:
     """Operational logs must not depend on Whisper's decorative templates."""
     print(f"[{proc_name}] {message}", flush=True)
@@ -1565,7 +1589,7 @@ def consume_plex_control_requests(server, cfg, seen: dict, proc_name: str) -> No
                 bus.set_int(KEY_CONTROL_LAST_COMMAND, PLEX_CONTROL_CODES[command])
                 bus.set_int(KEY_CONTROL_LAST_OK, 0)
                 bus.set_int(KEY_CONTROL_LAST_SEQ, current)
-                log_error(proc_name, "Plex control command failed", f"{command}: {exc}")
+                log_error(proc_name, "Plex control command failed", f"{command}: {redact_plex_token(exc)}")
                 break
 
 
@@ -1578,35 +1602,52 @@ def _clear_lyrics(state: dict) -> None:
     state["lyrics_source"] = "none"
     _publish_blank_lyric(state)
 
+
+def publish_no_session(state: dict, clock: "PlaybackClock", now: float) -> None:
+    """Publish an explicit stopped/N/A Plex record (no session, or no server)."""
+    clock.stop(now)
+    bus.set_int(KEY_PLAY_STATE, PLAY_STOPPED)
+    bus.set_float(KEY_POSITION_SEC, 0.0)
+    bus.set_float(KEY_DURATION_SEC, 0.0)
+    state["plex_full_track"] = None
+    state["plex_parent_album"] = None
+    bus.set_int("/album/ultra/valid", 0)
+    if bus.get_int(KEY_PLEX_ART_VALID, -1) != 0:
+        _clear_album_art()
+    publish_plex_metadata(None, state)
+    _clear_lyrics(state)
+
+
+def discard_plex_control_requests(seen: dict, proc_name: str, reason: str) -> None:
+    """Consume presses that arrive while Plex is unavailable instead of replaying them later."""
+    for command, key in PLEX_CONTROL_KEYS.items():
+        current = bus.get_int(key, 0)
+        if current == seen.get(command, current):
+            continue
+        seen[command] = current
+        bus.set_int(KEY_CONTROL_LAST_COMMAND, PLEX_CONTROL_CODES[command])
+        bus.set_int(KEY_CONTROL_LAST_OK, 0)
+        bus.set_int(KEY_CONTROL_LAST_SEQ, current)
+        log_error(proc_name, "Plex control command failed", f"{command}: {reason}",
+                  dedupe_key=f"{proc_name}:plex_control_unavailable")
+
+
 def main():
     """Configure and run the component until shutdown."""
-    cfg = load_cfg()
-    validate_minstrel(cfg)
+    cfg = load_cfg()  # malformed configuration raises ConfigError -> exit 2
     proc_name = str(cfg.get("proc_name", "minstrel"))
-    server_name = cfg.get("server_name")
-    username = cfg.get("username")
-    password = cfg.get("password")
-    token = cfg.get("token")
-    url = cfg.get("url")
-
     log_info(proc_name, "started")
 
-    has_token_login = bool(url and token)
-    has_account_login = bool(server_name and username and password)
-    if not (has_token_login or has_account_login):
-        log_error(
-            proc_name,
-            "no_login",
-            "Configure token+url, username+password+server_name, or preferably both.",
-        )
-        sys.exit(1)
+    connector = PlexConnector(
+        load_cfg,
+        environ=os.environ,
+        server_factory=PlexServer,
+        account_factory=MyPlexAccount,
+        proc_name=proc_name,
+        redact=REDACT,
+        initial_cfg=cfg,
+    )
 
-    if has_token_login:
-        log_info(proc_name, "url_found")
-    if has_account_login:
-        log_info(proc_name, "user_found")
-
-    client_name = cfg.get("plex_client_name")
     poll_interval = max(0.1, float(cfg.get("poll_interval_s", 1.0)))
     lyrics_interval = max(0.05, float(cfg.get("lyrics_update_interval_s", 0.25)))
     clock = PlaybackClock(
@@ -1616,18 +1657,12 @@ def main():
         offset_change_epsilon_s=cfg.get("clock_offset_change_epsilon_s", 0.001),
     )
 
-    server = None
-    force_account_login = False
     prev_state = None
     last_track_rk = None
     track_change_seq = 0
-    last_hb = 0.0
     next_poll = 0.0
     next_lyrics_tick = 0.0
-
-    backoff = 1.0
-    backoff_max = 30.0
-    next_connect_attempt = 0.0
+    heartbeat = bus.Heartbeat(proc_name, on_beat=log_heartbeat)
 
     state = {}
     # Baseline any pre-existing shared-memory values. This prevents an old
@@ -1637,8 +1672,11 @@ def main():
     bus.set_int(KEY_CONTROL_LAST_OK, 1)
     bus.set_int(KEY_CONTROL_LAST_SEQ, 0)
     bus.set_int(KEY_PLEX_METADATA_SEQ, 0)
+    artwork_cache = open_artwork_cache(cfg, proc_name)
+    publish_hosted_art_url("")  # clear a URL left in shared memory by an earlier run
+    bus.set_int(KEY_PLEX_CONNECTION_STATE, connector.state)
     _clear_album_art()
-    publish_plex_metadata(None, state)
+    publish_no_session(state, clock, time.monotonic())
     stopping = False
 
     def on_stop(signum, frame):
@@ -1655,133 +1693,80 @@ def main():
 
             # Poll Plex independently from lyric updates. The API is a coarse
             # reference; the local clock supplies the smooth position between
-            # these observations.
+            # these observations. The connector never sleeps on a retry delay.
             if now >= next_poll:
                 next_poll = now + poll_interval
-
-                if server is None and now >= next_connect_attempt:
-                    try:
-                        server, token, url = connect_plex(
-                            server_name,
-                            username,
-                            password,
-                            token,
-                            url,
-                            cfg,
-                            force_account_login=force_account_login,
-                        )
-                        # A successful credential refresh gives us a new token;
-                        # future reconnects may use that cache normally again.
-                        force_account_login = False
-                        backoff = 1.0
-                    except Exception as e:
-                        # One failed connection attempt is enough to retire the
-                        # cached token for this recovery cycle. Credentials are
-                        # deliberately retained in the YAML, so every retry
-                        # after a failure uses them to obtain a fresh token
-                        # instead of repeatedly knocking on Plex with the same
-                        # dead one.
-                        if has_account_login:
-                            force_account_login = True
-                            log_error(
-                                proc_name,
-                                "Plex connection failed; next attempt will use saved username/password",
-                                str(e),
-                            )
-                        else:
-                            log_error(proc_name, "Failed to connect to Plex", str(e))
-                        server = None
-                        next_connect_attempt = now + backoff
-                        backoff = min(backoff * 2.0, backoff_max)
-
+                server = connector.poll(now)
+                sess = None
                 if server is not None:
                     try:
-                        sess = find_plexamp_session(server, client_name)
+                        sess = find_plexamp_session(server, connector.client_name)
                     except Exception as e:
-                        # Do not try to classify the failure and then keep
-                        # retrying an old cached token. PlexAPI exposes 401s
-                        # inconsistently, and the practical rule for this Deck
-                        # is simple: one failed session query retires the token
-                        # for this recovery cycle. Use the saved username and
-                        # password on the next attempt to obtain a new one.
-                        if has_account_login:
-                            force_account_login = True
-                            log_error(
-                                proc_name,
-                                "Plex session query failed; refreshing via saved username/password",
-                                str(e),
-                            )
-                        else:
-                            log_error(proc_name, "Error querying Plex", str(e))
-
+                        connector.connection_lost(e, now)
                         server = None
-                        sess = None
-                        next_connect_attempt = now
-
-                    if sess is None:
-                        prev_state = PLAY_STOPPED
-                        last_track_rk = None
-                        clock.stop(now)
-                        bus.set_int(KEY_PLAY_STATE, PLAY_STOPPED)
-                        bus.set_float(KEY_POSITION_SEC, 0.0)
-                        bus.set_float(KEY_DURATION_SEC, 0.0)
-                        state["plex_full_track"] = None
-                        state["plex_parent_album"] = None
-                        bus.set_int("/album/ultra/valid", 0)
-                        _clear_album_art()
-                        publish_plex_metadata(None, state)
-                        _clear_lyrics(state)
                     else:
-                        rk_int, play_state, raw_pos_s = publish_basic_state(sess, prev_state)
-                        track_changed = last_track_rk is None or rk_int != last_track_rk
-                        clock.observe(
-                            raw_pos_s,
-                            play_state,
-                            now=now,
-                            force_reset=track_changed,
+                        connector.mark_healthy()
+                bus.set_int(KEY_PLEX_CONNECTION_STATE, connector.state)
+
+                if sess is None:
+                    prev_state = PLAY_STOPPED
+                    last_track_rk = None
+                    publish_no_session(state, clock, now)
+                else:
+                    rk_int, play_state, raw_pos_s = publish_basic_state(sess, prev_state)
+                    track_changed = last_track_rk is None or rk_int != last_track_rk
+                    clock.observe(
+                        raw_pos_s,
+                        play_state,
+                        now=now,
+                        force_reset=track_changed,
+                    )
+
+                    if track_changed:
+                        last_track_rk = rk_int
+                        track_change_seq = (track_change_seq + 1) & 0x7FFFFFFF
+                        bus.set_int(KEY_TRACK_CHANGE, track_change_seq)
+
+                        # Session responses are intentionally thin. Fetch
+                        # the full track once per change for the Track Info
+                        # page, while retaining the session as a safe fallback.
+                        state["plex_full_track"] = _safe_fetch_track(server, sess)
+                        state["plex_parent_album"] = _safe_fetch_parent_album(
+                            server, state["plex_full_track"], sess
                         )
 
-                        if track_changed:
-                            last_track_rk = rk_int
-                            track_change_seq = (track_change_seq + 1) & 0x7FFFFFFF
-                            bus.set_int(KEY_TRACK_CHANGE, track_change_seq)
+                        state["lyrics_lrc"] = fetch_timed_lyrics_from_plex(sess, server)
+                        state["lyrics_times"] = [t for (t, _) in state["lyrics_lrc"]]
+                        state["lyrics_last_idx"] = None
+                        if state["lyrics_lrc"]:
+                            state["lyrics_source"] = "timed"
+                            # Publish the initial lyric context immediately on
+                            # track change instead of waiting for the next timed
+                            # lyric tick. Long intros deserve better than an
+                            # empty box wearing a fake moustache.
+                            first_text = state["lyrics_lrc"][0][1]
+                            second_text = state["lyrics_lrc"][1][1] if len(state["lyrics_lrc"]) > 1 else ""
+                            state["lyrics_last_idx"] = -2
+                            publish_lyrics_context("", first_text, second_text, -1, state)
+                        else:
+                            state["lyrics_source"] = "none"
+                            _publish_blank_lyric(state)
 
-                            # Session responses are intentionally thin. Fetch
-                            # the full track once per change for the Track Info
-                            # page, while retaining the session as a safe fallback.
-                            state["plex_full_track"] = _safe_fetch_track(server, sess)
-                            state["plex_parent_album"] = _safe_fetch_parent_album(
-                                server, state["plex_full_track"], sess
-                            )
+                        publishTrackInfo(state["plex_full_track"])
+                        publish_album_art(server, state["plex_full_track"], sess, connector.cfg,
+                                          artwork_cache=artwork_cache)
+                        publish_public_album_art(server, state["plex_full_track"], sess, connector.cfg, state)
 
-                            state["lyrics_lrc"] = fetch_timed_lyrics_from_plex(sess, server)
-                            state["lyrics_times"] = [t for (t, _) in state["lyrics_lrc"]]
-                            state["lyrics_last_idx"] = None
-                            if state["lyrics_lrc"]:
-                                state["lyrics_source"] = "timed"
-                                # Publish the initial lyric context immediately on
-                                # track change instead of waiting for the next timed
-                                # lyric tick. Long intros deserve better than an
-                                # empty box wearing a fake moustache.
-                                first_text = state["lyrics_lrc"][0][1]
-                                second_text = state["lyrics_lrc"][1][1] if len(state["lyrics_lrc"]) > 1 else ""
-                                state["lyrics_last_idx"] = -2
-                                publish_lyrics_context("", first_text, second_text, -1, state)
-                            else:
-                                state["lyrics_source"] = "none"
-                                _publish_blank_lyric(state)
-
-                            publishTrackInfo(state["plex_full_track"])
-                            publish_album_art(server, state["plex_full_track"], sess, cfg)
-
-                        publish_plex_metadata(sess, state)
-                        prev_state = play_state
+                    publish_plex_metadata(sess, state)
+                    prev_state = play_state
 
             # Transport requests are independent of the 1 Hz Plex session poll
             # so physical buttons remain responsive. They target the Deck's
             # configured Plexamp client even while that client is idle.
-            if server is not None:
-                consume_plex_control_requests(server, cfg, control_seen, proc_name)
+            if connector.server is not None:
+                consume_plex_control_requests(connector.server, connector.cfg, control_seen, proc_name)
+            else:
+                discard_plex_control_requests(control_seen, proc_name, "Plex is unavailable")
 
             # Publish a smooth position for the eventual UI even though Plex is
             # only polled once per second.
@@ -1793,12 +1778,9 @@ def main():
                 if state.get("lyrics_source") == "timed":
                     update_timed_lyrics_line(clock.position(now), state)
 
-            if now - last_hb > 1.0:
-                heartbeat(proc_name)
-                log_heartbeat(proc_name)
-                last_hb = now
+            heartbeat.tick(now)
 
-            next_due = min(next_poll, next_lyrics_tick, last_hb + 1.0)
+            next_due = min(next_poll, next_lyrics_tick, heartbeat.next_due)
             time.sleep(max(0.01, min(0.05, next_due - time.monotonic())))
 
     finally:

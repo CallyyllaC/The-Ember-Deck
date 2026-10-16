@@ -1,6 +1,6 @@
 # Media gallery
 
-[← Project overview](../README.md) · [Installation](INSTALLATION.md)
+[← Backup and troubleshooting](TROUBLESHOOTING.md) · [Project overview](../README.md)
 
 ## Finished build
 
@@ -9,6 +9,8 @@
 ![Final left view](../Images/Left%20Final.jpg)
 
 ![Final top view](../Images/Top%20Final.jpg)
+
+The demonstration videos keep their original sound, which is part of what they demonstrate. The footage is project material under the Awoo Licence; the music and other third-party content in it are not. See [AWOO-ASSETS-DEFINITION.md](../AWOO-ASSETS-DEFINITION.md).
 
 ## Final demonstrations
 

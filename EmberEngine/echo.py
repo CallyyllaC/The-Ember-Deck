@@ -13,6 +13,7 @@ Heartbeat:
 """
 
 import os
+import sys
 import time
 import signal
 from pathlib import Path
@@ -25,6 +26,7 @@ import sounddevice as sd
 import synapse as bus  # per-variable shared memory helpers
 
 from whisper_daemon import log_info, log_error, log_event, log_heartbeat
+from runtime_config import ConfigError, require_mapping, validate_echo
 
 # ---------- defaults ----------
 
@@ -54,9 +56,10 @@ def load_cfg() -> dict[str, Any]:
     cfg: dict[str, Any] = {}
     if cfg_path and Path(cfg_path).exists():
         with open(cfg_path, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
+            cfg = require_mapping("echo", yaml.safe_load(f))
     out = DEFAULTS.copy()
     out.update(cfg)
+    validate_echo(out)
     out["period"] = 1.0 / max(1, int(out["fps"]))
     out["waveform_samples"] = max(16, int(out.get("waveform_samples", 160)))
     return out
@@ -81,18 +84,6 @@ def mix_to_mono(x: np.ndarray) -> np.ndarray:
     if x.ndim == 2 and x.shape[1] >= 2:
         return x[:, 0:2].mean(axis=1).astype(np.float32)
     return x.astype(np.float32)
-
-
-def heartbeat(name: str) -> None:
-    """
-    Publish a heartbeat in Synapse for FoundryCore.
-    """
-    now_ms = int(time.monotonic() * 1000)
-    key_base = f"/proc/{name}"
-    bus.set_int(f"{key_base}/heartbeat_ms", now_ms)
-    seq_key = f"{key_base}/hb_seq"
-    bus.set_int(seq_key, bus.get_int(seq_key, 0) + 1)
-    log_heartbeat(name)
 
 
 def main() -> None:
@@ -193,7 +184,7 @@ def main() -> None:
     signal.signal(signal.SIGTERM, on_stop)
 
     seq = 0
-    last_hb = 0.0
+    heartbeat = bus.Heartbeat(proc, on_beat=log_heartbeat)
     next_pub = time.monotonic()
     next_connect_at = 0.0
     stream = None
@@ -279,10 +270,7 @@ def main() -> None:
                 bus.set_array(waveform_key, waveform, "f32")
                 bus.set_int("/audio/seq2", seq)
 
-            # heartbeat ~1 Hz
-            if now - last_hb > 1.0:
-                heartbeat(proc)
-                last_hb = now
+            heartbeat.tick(now)
 
             # small sleep to avoid busy loop
             time.sleep(0.001)
@@ -302,4 +290,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ConfigError as exc:
+        print(str(exc), file=sys.stderr, flush=True)
+        raise SystemExit(2) from None

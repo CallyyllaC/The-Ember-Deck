@@ -25,6 +25,35 @@ env/
 logs/
 EmberEngine/configs/pawprint_state.yaml
 
+# Local secrets and cached credentials (mode 0600). Only *.example.yaml
+# templates with placeholders are tracked. Never force-add these files.
+EmberEngine/configs/*_secrets.yaml
+# Per-Deck public settings (application IDs, hostnames, local paths), merged over
+# the shipped configs/<name>.yaml templates. Not secret, but personal.
+EmberEngine/configs/*.local.yaml
+EmberEngine/configs/.*.tmp
+
+# Awoo supporter licences are personal entitlement material.
+*.licence
+
+# Discord Social SDK (proprietary, downloaded from the Discord Developer
+# Portal; not redistributed here) and native bridge build output.
+EmberEngine/third_party/discord_social_sdk/
+DiscordSocialSdk-*.zip
+discord_social_sdk*.zip
+EmberEngine/discord_bridge/build/
+EmberEngine/discord_bridge/build-*/
+# Local archives of the bridge sources; the sources themselves are tracked.
+EmberEngine/discord_bridge/*.zip
+
+# Editor/IDE workspace settings and merge/backup leftovers
+.vscode/
+.idea/
+*.code-workspace
+*.bak
+*.orig
+*.rej
+
 # Linux/editor temporary files
 *~
 *.swp
@@ -41,3 +70,7 @@ desktop.ini
 EmberEngine/minstrel (2).py
 EmberEngine/test_artwork_palette.py
 EmberEngine/test_aurora_palette.py
+Images/Top Right Final (Large).jpg
+docs/ARCHITECTURE.md
+RPC Images/Awoo-Discord-Assets-README.txt
+RPC Images/New-AwooDiscordAssets.ps1

@@ -1,8 +1,10 @@
 # Installation
 
-[← Software architecture](SOFTWARE.md) · [Media gallery →](MEDIA.md)
+[← Configuration reference](CONFIGURATION.md) · [Enabling Discord Rich Presence →](ENABLING_DISCORD_RICH_PRESENCE.md)
 
 These steps describe the repository’s current software shape, but hardware device names and the final graphical service must be checked on the live Raspberry Pi.
+
+The verified Deck is a Raspberry Pi 5 running 64-bit Raspberry Pi OS with the Labwc (Wayland) desktop and Python 3.13. Other boards, operating systems and desktops have not been tested. The physical I/O workers expect the controls, I²C devices, BlinkStick and displays described in [Hardware and I/O](HARDWARE.md); GPIO numbers are fixed in `pawprint.py`, so a different wiring layout needs a code change.
 
 ## Base packages
 
@@ -32,7 +34,7 @@ Log out completely or reboot before relying on new group membership.
 The systemd units deliberately expect the runnable `EmberEngine` directory at `~/EmberDeck`. From a repository checkout, copy that directory (or make an equivalent symlink) before creating the environment:
 
 ```bash
-git clone <repository-url> ~/The-Ember-Deck
+git clone https://github.com/CallyyllaC/The-Ember-Deck.git ~/The-Ember-Deck
 cp -a ~/The-Ember-Deck/EmberEngine ~/EmberDeck
 cd ~/EmberDeck
 python3 -m venv --system-site-packages .venv
@@ -40,21 +42,35 @@ source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install \
   numpy sounddevice pyyaml plexapi blinkstick pyusb \
-  adafruit-circuitpython-ads1x15 adafruit-blinka gpiozero \
+  adafruit-circuitpython-ads1x15 adafruit-circuitpython-ht16k33 \
+  adafruit-blinka gpiozero \
   pillow psutil rich textual
 ```
+
+Pawprint imports `adafruit_ads1x15` and `adafruit_ht16k33` at start-up, so both packages are required even before the I²C hardware is connected.
 
 `adafruit-blinka` provides the `board` module. Do not install the unrelated PyPI package named `board`.
 
 `docs/requirements.txt` is a historical full-machine `pip freeze`, not a minimal lock file. It includes unrelated Raspberry Pi desktop packages and is useful for provenance, but the command above is the supported application dependency set.
 
-Before starting services, edit `~/EmberDeck/configs/minstrel.yaml` and set the Deck's exact Plexamp client name plus one complete login method. Protect a file containing credentials:
+Before starting services, create `~/EmberDeck/configs/minstrel.local.yaml` (merged over the shipped `minstrel.yaml`; see [local overrides](CONFIGURATION.md#local-overrides-namelocalyaml)) and set the Deck's exact Plexamp client name (`plex_client_name`) and Plex server name (`server_name`). Both are the names Plex shows, not secrets:
 
-```bash
-chmod 600 ~/EmberDeck/configs/minstrel.yaml
+```yaml
+# ~/EmberDeck/configs/minstrel.local.yaml
+server_name: My Plex Server        # the Plex Media Server name used for sign-in
+plex_client_name: Ember Deck       # this Deck's Plexamp player title, exactly as Plex shows it
 ```
 
-Credentials can instead be supplied through the `EMBERDECK_PLEX_*` environment values in the [configuration reference](CONFIGURATION.md).
+Put the Plex account credentials in the private, gitignored secrets file:
+
+```bash
+cd ~/EmberDeck/configs
+cp minstrel_secrets.example.yaml minstrel_secrets.yaml
+chmod 600 minstrel_secrets.yaml
+nano minstrel_secrets.yaml
+```
+
+Minstrel logs in with these credentials when it has no working token and stores the refreshed URL/token in the same file, so tokens never need replacing by hand. Credentials can instead be supplied through the `EMBERDECK_PLEX_*` environment values in the [configuration reference](CONFIGURATION.md). Without credentials the Deck still runs; Plex simply stays unavailable until they are added.
 
 ## Plexamp Headless
 
@@ -191,16 +207,26 @@ sudo apt install -y easyeffects
 easyeffects
 ```
 
+## Discord Rich Presence (optional)
+
+Skip this if you do not want Discord Rich Presence; Ember Deck works normally without it. Setting it up means creating a Discord application, installing the Discord Social SDK, building the `discord_bridge` helper for Box64, writing a small `configs/rich_presence.local.yaml` and linking your Discord account once from the Pi's desktop. Showing real Plex album covers additionally needs a Cloudflare Tunnel.
+
+All of it is in **[Enabling Discord Rich Presence](ENABLING_DISCORD_RICH_PRESENCE.md)**, including configuration, verification, privacy, removal and troubleshooting.
+
 ## Verification
 
 ```bash
 i2cdetect -y 1
 python -m pip check
 python -m compileall -q ~/EmberDeck
+python ~/EmberDeck/runtime_config.py ~/EmberDeck/configs --require-secrets
 python -m unittest discover -s ~/The-Ember-Deck/tests -p 'test*.py' -v
+(cd ~/The-Ember-Deck/EmberEngine && python -m unittest test_whisper_logging -v)
 python -m sounddevice
 systemctl --user status plexamp.service emberdeck.service ember-ui.service ember-browser.service
 journalctl --user -u emberdeck.service -b
 ```
+
+The unit tests need no Deck hardware: on any computer with Python 3, `numpy` and `pyyaml` (plus `pillow` and `cryptography` to avoid skips), run the same two `unittest` commands from a repository checkout. GPIO, audio, BlinkStick and Plex libraries are replaced by stand-ins when they are not installed. Everything physical still has to be checked on the Pi; see the [hardware validation checklist](ARCHITECTURE.md#hardware-validation-checklist).
 
 The I²C scan should show devices at `0x48` and `0x70`. Confirm the DAC, capture device, BlinkStick, both selectors, every tape key and the safe-shutdown hold before closing the enclosure.

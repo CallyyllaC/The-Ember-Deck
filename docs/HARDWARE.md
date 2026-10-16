@@ -1,6 +1,6 @@
 # Hardware and I/O
 
-[← Project overview](../README.md) · [Software architecture →](SOFTWARE.md)
+[← Build story](BUILD.md) · [Software architecture →](SOFTWARE.md)
 
 This page records the hardware used in the finished V1 Deck and how the physical controls are presented to the software.
 

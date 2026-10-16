@@ -1,0 +1,580 @@
+# Awoo Licence v2.0
+
+This is a custom source-available licence. It permits non-commercial use,
+copying, modification and redistribution, and ordinary professional use of the
+Software as a tool, subject to the terms below. It is not an OSI-approved
+open-source licence.
+
+## 1. Definitions
+
+**Licence** means this Awoo Licence v2.0. A reference to this Licence does not
+include Awoo Licence v1.0 or any other version.
+
+**Licensor** means the copyright holder or holders, or another person authorised
+by them, who make the Software available under this Licence.
+
+**Original Project** means the project and version of that project which the
+Licensor makes available under this Licence. A Derivative Work does not become
+the Original Project merely because it is based on it.
+
+**Software** means the Original Project's source code, compiled software,
+documentation and other project material made available under this Licence. It
+does not include:
+
+- material identified as being subject to a separate third-party licence or
+  other third-party terms; or
+- material excluded from this Licence, or made subject to separate terms, by an
+  applicable `AWOO-ASSETS-DEFINITION.md`.
+
+**Derivative Work** means a modified version of the Software or another work
+based on it that incorporates or adapts the Software or any part of it. An
+independent work is not a Derivative Work merely because it performs a similar
+task or provides similar functionality.
+
+**Distribute** means to provide, publish, convey, sell, supply or otherwise make
+a copy of the Software or a Derivative Work available to another person. It
+includes distribution in source or compiled form and distribution as part of a
+larger product, service or hardware bundle.
+
+**Commercial Use** has the meaning given in section 3.
+
+**Voluntary Support** means a genuinely voluntary payment or contribution which
+is not required, requested as the price for, or given in exchange for:
+
+- access to the Software or a Derivative Work;
+- ordinary software functionality or features;
+- a software build, download, update or entitlement;
+- hosted or managed access to the Software; or
+- another product or service supplied using the Software itself as the thing
+  being sold.
+
+Voluntary Support may result in acknowledgement, thanks, credits, community
+recognition or similar non-functional benefits.
+
+**Official Supporter System** means the optional supporter mechanism expressly
+defined for an Original Project in its `AWOO-SUPPORTER-SYSTEM.md`, including any
+shared cross-project supporter system identified there.
+
+**Supporter Feature** means a feature or extension expressly identified with
+reasonable specificity in the applicable `AWOO-SUPPORTER-SYSTEM.md` as requiring
+an Official Supporter Licence. A Supporter Feature must also comply with
+sections 5 to 8. Merely labelling something as a Supporter Feature does not make
+it one where those requirements are not met.
+
+**Official Supporter Licence** means a licence or entitlement issued or
+authorised by the Licensor through the Official Supporter System which grants
+access to one or more defined Supporter Features. It is distinct from this
+Licence and does not grant Commercial Use.
+
+**Official Supporter Contribution** means an optional contribution through the
+Official Supporter System which may result in an Official Supporter Licence. It
+is not Voluntary Support where functional Supporter Features are supplied in
+return, but it is excluded from Commercial Use only to the extent expressly
+permitted by sections 5 to 8.
+
+**Contribution** means original material intentionally submitted by a person to
+the Licensor for inclusion in the Original Project, including code,
+documentation, designs or other copyright material. Material conspicuously
+identified in writing as not being a contribution is not a Contribution.
+
+**Contributor** means a person who submits a Contribution.
+
+## 2. Licence grant and permitted use
+
+Subject to this Licence, the Licensor grants you a worldwide, non-exclusive,
+royalty-free copyright licence to inspect, use, run, reproduce, copy, modify,
+prepare Derivative Works from and Distribute the Software for non-commercial
+purposes.
+
+Ordinary professional or business use of the Software or a Derivative Work as a
+tool is also permitted. The fact that a user is paid for their work, operates a
+business, or gains an indirect economic benefit from work carried out with the
+Software does not by itself make that use Commercial Use. For example, a
+professional photographer may use photography-planning software while carrying
+out paid photography.
+
+You may charge for advice, installation, configuration, administration,
+training or consultancy involving the Software as a tool where the customer is
+independently entitled to obtain and use the relevant Software. A fee for those
+services must not be used as a substitute price for access to the Software or a
+Derivative Work. Supplying a modified Derivative Work as part of a paid product
+or deliverable, or effectively charging for access to that Derivative Work, is
+Commercial Use.
+
+The permissions in this section are conditional on compliance with the rest of
+this Licence. Exercising a permission which copyright law reserves to the
+Licensor signifies acceptance of this Licence.
+
+## 3. Commercial Use
+
+Commercial Use means exploiting, supplying or monetising the Software or a
+Derivative Work itself for commercial advantage or in exchange for payment,
+purchase, subscription, fee or other consideration. It includes, without
+limitation:
+
+1. selling the Software or a Derivative Work;
+2. charging for a download, copy, build, licence, activation, access or use;
+3. charging to unlock, enable or retain software functionality;
+4. providing the Software through a paid software subscription or a mandatory
+   paid membership;
+5. providing paid hosted, managed or software-as-a-service access;
+6. charging an app-store or marketplace price for obtaining it;
+7. monetising its distribution;
+8. including it in a product, service or package being sold where the Software
+   contributes to the value of what is sold;
+9. supplying it or a Derivative Work in or with commercial hardware, including
+   where the stated charge is allocated to the hardware and the software is
+   described as free;
+10. supplying it as part of a commercial software or service offering;
+11. receiving revenue from advertising displayed in or through a distributed
+    copy of the Software or a Derivative Work; and
+12. receiving payment for product placement, promoted content, promoted links
+    or other marketing placement in or through the Software or a Derivative
+    Work.
+
+A zero-price download is not necessarily non-commercial. Advertising-funded or
+otherwise monetised distribution remains Commercial Use. Conversely,
+distribution through a no-charge app-store listing is not Commercial Use merely
+because an app store is used.
+
+Commercial Use does not include:
+
+- ordinary professional or business use as a tool permitted by section 2;
+- genuine Voluntary Support;
+- development sponsorship where the sponsor receives acknowledgement or credit
+  only, even if the sponsor is a business; or
+- compliant Official Supporter Contributions under sections 5 to 8.
+
+General crowdfunding may be Voluntary Support where contributors fund
+development and ordinary public access to the Software is not sold to them. A
+crowdfunding reward or campaign is Commercial Use where it effectively sells
+the Software, a Derivative Work, a software build, ordinary feature access, or
+another software entitlement. Compliant Supporter Features may be supplied
+through an Official Supporter System under sections 5 to 8.
+
+This Licence does not grant Commercial Use. Commercial Use requires separate
+written permission from the Licensor under section 16.
+
+## 4. Redistribution and notices
+
+You may Distribute copies and Derivative Works only if you:
+
+1. include a complete copy of this Licence;
+2. keep the copy or Derivative Work subject to this Licence, except to the
+   extent that applicable separate written permission under section 16
+   expressly provides otherwise;
+3. preserve applicable copyright, licence and attribution notices;
+4. include the applicable `AWOO-SUPPORTER-SYSTEM.md` and
+   `AWOO-ASSETS-DEFINITION.md`, if present, except that a compliant removal of
+   an Official Supporter System under section 9 may remove
+   `AWOO-SUPPORTER-SYSTEM.md`; and
+5. comply with the derivative identification and branding requirements in
+   sections 11 and 12.
+
+You may add other notices, licences or terms only where they do not contradict,
+remove, restrict or weaken this Licence as it applies to the Software. Separate
+terms may govern your own material in a larger work, provided they do not purport
+to alter the terms governing the Software incorporated into it.
+
+This Licence does not require a person who Distributes a Derivative Work,
+including in binary or compiled form, to publish or provide the source code of
+their modifications. This does not alter any source-code, corresponding-source,
+source-offer or other obligation imposed by an applicable third-party licence
+or term.
+
+## 5. When supporter provisions apply
+
+An Official Supporter System, Official Supporter Licences and Supporter Features
+exist under this Licence only where the Original Project expressly defines them
+in an `AWOO-SUPPORTER-SYSTEM.md` distributed with the relevant version. If that
+file is absent, sections 6 to 10 do not create supporter restrictions or
+supporter entitlements for that project.
+
+The file may identify:
+
+- the official supporter mechanism and any shared system in which the Original
+  Project participates;
+- how supporter identity or entitlement is recognised;
+- the protected Supporter Features; and
+- the components, links and flows used by the Official Supporter System.
+
+The `AWOO-` prefix identifies a companion file with a defined meaning under this
+Licence. It does not identify the owner of a project and does not imply that the
+project is owned, operated or endorsed by any particular organisation.
+
+An Official Supporter Contribution and the resulting access to compliant
+Supporter Features do not by themselves constitute Commercial Use. This is a
+narrow exception for the Licensor's Official Supporter System. It does not
+authorise a Derivative Work to operate a separate paid feature shop or to sell
+access to official Supporter Features.
+
+## 6. Requirements for Supporter Features
+
+Supporter Features may enhance the ordinary experience. They must not be
+created by deliberately degrading, obstructing or withholding the ordinary
+experience.
+
+The non-supporter implementation of the Original Project must remain reasonably
+usable for its intended purpose, considered as a whole. Supporter Features may
+include enhanced implementations, genuinely higher limits, convenience
+features, cosmetic options, more elaborate themes, performance improvements,
+additional automation or richer variants of existing functionality where that
+requirement remains satisfied.
+
+In deciding whether the non-supporter implementation remains reasonably usable,
+the substance and practical effect of the design prevail over labels. The
+Official Supporter System must not manufacture supporter value by deliberately:
+
+- crippling functionality or hollowing out a normal use case;
+- fragmenting a normal workflow;
+- reducing performance or adding artificial waits;
+- imposing nuisance restrictions, repeated upgrade prompts, unnecessary
+  interstitials or interruptions;
+- choosing intentionally poor defaults primarily to make supporter access
+  tolerable;
+- setting artificially low limits unrelated to a genuine constraint;
+- forcing unreasonable workarounds or other artificial friction; or
+- creating or adding a problem primarily so that a Supporter Feature can remove
+  it.
+
+Removing deliberately intrusive advertising may not be used as a Supporter
+Feature where the advertising was introduced or designed primarily to create
+supporter value. This rule applies even where the advertising is separately
+authorised Commercial Use, unless the separate written permission expressly
+modifies this section.
+
+Necessary error messages, privacy or legal notices, security controls, genuine
+technical limitations, legal restrictions, external API or service quotas,
+actual external-resource costs and comparable constraints are not artificial
+degradation merely because supporters receive an enhanced implementation. A
+higher supporter limit may be valid where the ordinary implementation remains
+reasonably useful and the distinction has a genuine basis.
+
+The number of contribution levels or suggested contribution amounts does not by
+itself determine compliance. Multiple tiers are permitted, and an entitlement
+may be represented internally in any reasonable form. The practical test is
+whether the ordinary implementation remains reasonably usable and the benefits
+are genuine extensions rather than separately sold ordinary functionality.
+
+## 7. Compatibility, accessibility and security
+
+The Licensor is free to decide which platforms, operating systems,
+architectures, devices, protocols, file formats, services and other environments
+the Original Project supports. This Licence does not require the Licensor to
+implement or maintain compatibility which does not otherwise exist.
+
+Where compatibility has been implemented for a supported environment, the
+compatibility itself must not be designated or used as a Supporter Feature
+merely because a user relies on that environment. This includes implemented
+support for:
+
+- operating systems and processor architectures;
+- devices, cameras and hardware;
+- device, camera, hardware and interoperability protocols;
+- file, import and export formats; and
+- accessibility technologies and equivalent compatibility layers.
+
+An optional enhancement specific to an environment may still qualify as a
+Supporter Feature if users of that supported environment retain reasonably
+usable ordinary compatibility and section 6 is otherwise satisfied.
+
+Accessibility support necessary for reasonable access to existing functionality
+must not be supporter-only. A security fix necessary to use existing
+functionality safely must not be supporter-only.
+
+## 8. Shared supporter systems
+
+The Licensor may choose which of its projects participate in a supporter
+system. No project is required to establish an Official Supporter System, and
+unrelated licensors are not required to share one.
+
+Where the same Licensor has more than one participating project, their Official
+Supporter System must, wherever reasonably practicable, operate as one shared
+supporter system with a shared supporter identity or entitlement recognised by
+the participating projects. Each project's `AWOO-SUPPORTER-SYSTEM.md` may define
+its own compliant Supporter Features and implementation details.
+
+The participating projects must not be structured as separate project-specific
+or feature-specific purchases presented as support. Different contribution
+amounts or tiers are permitted, but support must apply to the shared system
+rather than serving as the purchase price for an individual project or ordinary
+feature.
+
+Whether sharing is reasonably practicable must be assessed in good faith,
+having regard to matters such as different legal owners, incompatible existing
+systems, privacy and security obligations, platform restrictions, and
+disproportionate technical or administrative burden. Convenience, branding or a
+desire to charge separately for each project or feature is not enough by
+itself.
+
+## 9. Removing or retaining an Official Supporter System
+
+A Derivative Work may remove the Official Supporter System entirely. A complete
+removal may remove official support links, supporter licensing and activation
+workflows, entitlement mechanisms, supporter-facing components, and all defined
+Supporter Features.
+
+A Derivative Work may also retain the Official Supporter System, provided it
+preserves the applicable official entitlement rules and does not misrepresent
+the source or destination of support.
+
+Disabling, removing or altering an entitlement mechanism while leaving a
+defined Supporter Feature accessible without the required Official Supporter
+Licence is not a permitted removal of the Official Supporter System.
+
+A Derivative Work may operate a clearly separate donation or support mechanism.
+That mechanism must not grant access to official Supporter Features, reuse the
+official supporter identity in a misleading way, or constitute Commercial Use
+without separate written permission.
+
+## 10. Circumvention and good-faith research
+
+Except for the limited permission below, you must not intentionally bypass,
+falsify, disable, defeat or circumvent an official supporter entitlement or
+licensing mechanism in order to obtain or provide a Supporter Feature without
+the required Official Supporter Licence.
+
+You must not remove a Supporter Feature and then copy, expose, re-enable,
+reconstruct or intentionally reproduce it, or a substantially equivalent
+implementation of it, for the purpose of defeating the official entitlement.
+This restriction addresses deliberate circumvention. It does not prohibit
+independently developed generic functionality merely because it solves a
+similar problem. Similarity alone does not establish a circumvention purpose.
+
+You may temporarily inspect, bypass or manipulate an entitlement or supporter
+mechanism where, and only to the extent, reasonably necessary for good-faith:
+
+- security research or vulnerability investigation;
+- debugging or testing;
+- compatibility or interoperability testing; or
+- responsible vulnerability reporting.
+
+This limited permission does not permit you to:
+
+- Distribute a bypassed or unlocked copy or Derivative Work;
+- provide a protected Supporter Feature to another person without the required
+  Official Supporter Licence;
+- routinely use the Software as an unlocked supporter copy;
+- monetise the bypass; or
+- publish or supply a circumvention mechanism primarily intended to defeat
+  entitlement rather than enable legitimate research, testing, reporting or
+  interoperability.
+
+The activity must be proportionate to its legitimate purpose and must stop when
+the temporary bypass is no longer reasonably necessary for that purpose.
+
+## 11. Identification of Derivative Works
+
+When you Distribute a Derivative Work, you must state reasonably clearly that:
+
+1. it is modified from or derived from the Original Project; and
+2. it is not an official release of the Original Project, unless the Licensor
+   has expressly authorised you to present it as official.
+
+That statement must be reasonably visible both:
+
+- in the source repository or accompanying documentation; and
+- in the distributed application, package or product, in an appropriate place
+  such as About, Credits, Legal, package metadata, a notice file, command-line
+  help, or equivalent information suitable for the form of the work.
+
+You must not conceal or contradict that identification elsewhere in the
+Derivative Work or its distribution materials.
+
+## 12. Names, branding and original identity
+
+This Licence does not grant a trade mark right or a general right to use the
+Licensor's or Original Project's names, logos, project marks, artwork, branding
+or other source-identifying material.
+
+You must not reuse the Original Project's branding, supporter identity,
+supporter links, entitlement flows or official-project presentation in a way
+that falsely implies official status, endorsement, authorship, affiliation or
+continued control by the Licensor.
+
+Reasonable nominative or reference use is permitted where necessary to provide
+attribution, identify the origin of a Derivative Work, describe compatibility,
+or make a factually accurate comparison, provided the use is not misleading.
+Other reuse requires separate permission or must be permitted by the applicable
+asset terms.
+
+## 13. Assets and `AWOO-ASSETS-DEFINITION.md`
+
+The Licensor may include an `AWOO-ASSETS-DEFINITION.md` to identify project
+assets which are excluded from the copyright grant in section 2 or are subject
+to separate terms. The file may cover, for example, logos, photographs,
+illustrations, audio, icons, branded graphics, marketing material or other
+creative material.
+
+The file must identify the affected assets with reasonable clarity and may
+state that an asset:
+
+- is excluded from redistribution;
+- is all-rights-reserved;
+- may be used only for attribution or reference;
+- is licensed under a separately stated licence; or
+- is subject to another clearly stated restriction or permission.
+
+You must comply with those asset terms. Deleting or changing the file in a copy
+or Derivative Work does not grant rights in an asset or remove restrictions
+which applied to the original asset when you received it.
+
+If no `AWOO-ASSETS-DEFINITION.md` is supplied, the ordinary definition of
+Software and the third-party-material rules in section 15 apply. The absence of
+the file does not grant rights which the Licensor does not own and does not
+override separately stated third-party terms.
+
+## 14. Contributions to the Original Project
+
+Unless the Contributor and Licensor agree otherwise in writing, a Contributor
+retains copyright ownership of their Contribution. Submission does not by
+itself assign that copyright to the Licensor.
+
+By intentionally submitting a Contribution for inclusion in the Original
+Project, the Contributor grants the Licensor a perpetual, worldwide,
+non-exclusive, irrevocable, no-charge and royalty-free copyright licence to:
+
+- use, reproduce and modify the Contribution;
+- prepare adaptations and derivative works from it;
+- include it in the Original Project and in future versions of that project;
+- publish, display, perform and Distribute it, in source or compiled form;
+- sublicense and relicense it, including under different public or commercial
+  terms; and
+- otherwise commercially exploit it as part of, or in connection with, the
+  Original Project and related versions or offerings.
+
+The grant includes the right to exercise those rights through multiple tiers of
+licensees and sublicensees. It continues to apply if an accepted Contribution
+remains in the Original Project after the Contributor stops contributing.
+
+The Contributor represents that they have the authority to submit the
+Contribution and grant the rights above. A Contributor must not knowingly
+submit third-party material on terms incompatible with that grant without
+clearly identifying those terms and obtaining the Licensor's written agreement.
+
+A Contribution does not by itself give the Contributor any right to royalties,
+donation income, supporter income, commercial revenue, licence revenue,
+compensation, ownership or control of the Original Project, or any other
+monetary benefit. Any such right requires a separate written agreement.
+
+## 15. Third-party material
+
+Third-party software, libraries, services, datasets, APIs, media, assets and
+other third-party material remain subject to their own licences and terms. This
+Licence does not replace those terms, expand the rights they grant, or grant
+rights which the Licensor does not possess.
+
+Where a third-party term requires a notice, attribution, source offer or other
+condition, you remain responsible for satisfying it when your use or
+distribution triggers that condition.
+
+## 16. Separate written permission
+
+The Licensor may give a person separate written permission which permits
+Commercial Use, waives or modifies a restriction, or grants additional rights.
+That permission overrides this Licence only:
+
+- for the recipient or recipients it identifies;
+- for the Software, conduct and period it covers; and
+- to the extent it expressly differs from this Licence.
+
+Unless the written permission says otherwise, all unaffected terms of this
+Licence continue to apply. Permission given to one recipient does not amend the
+public Licence or grant the same permission to anyone else.
+
+The legal terms applicable to a recipient may therefore consist of:
+
+1. this Licence;
+2. an applicable `AWOO-SUPPORTER-SYSTEM.md` and
+   `AWOO-ASSETS-DEFINITION.md`, but only for the project-specific matters which
+   this Licence allows those files to define; and
+3. separate written permission expressly granted by the Licensor to that
+   recipient.
+
+An informal comment, community post, README statement or other documentation
+does not modify this Licence unless it clearly records written permission from
+the Licensor and identifies the permission being granted.
+
+## 17. Applicable project version and later upstream changes
+
+A Derivative Work is not required to pull, merge, adopt, track or update to any
+later change or release of the Original Project.
+
+For original material incorporated into a Derivative Work, supporter and asset
+definitions are determined by the companion files supplied with the upstream
+version of that material which the Derivative Work incorporated. Deleting or
+changing those definitions in the Derivative Work does not erase obligations
+which attached to the incorporated original material.
+
+If a Derivative Work incorporates a later upstream version, it may rely on that
+version's express retirement, graduation or reclassification of a Supporter
+Feature for the material which the later version updates or supersedes. A later
+definition does not retroactively change an older Derivative Work which has not
+incorporated that later upstream material, and it does not erase restrictions
+on older original material which the Derivative Work retains without the later
+replacement.
+
+Nothing in this Licence requires a Derivative Work to grant its changes back to
+the Licensor. An intentional submission to the Original Project is governed by
+section 14.
+
+An Original Project adopts only the exact version of the Awoo Licence which it
+identifies. Awoo Licence v1.0, this Licence, and any future version are separate
+licences. There is no automatic upgrade, migration or "or later version"
+permission.
+
+## 18. Termination and cure
+
+Your permissions under this Licence terminate automatically when you materially
+breach it.
+
+If you fully cure the material breach within 30 days after the earlier of your
+discovery of it or your receipt of notice from the Licensor, your permissions
+are automatically reinstated from the date of cure, unless the next paragraph
+applies. Cure includes stopping the breach and, so far as reasonably possible,
+correcting its continuing effects.
+
+For repeated or deliberate material breach, the Licensor may notify you in
+writing that automatic reinstatement is unavailable or that your permissions
+are permanently revoked. In that case, reinstatement requires the Licensor's
+express written permission. The Licensor is not required to treat any fixed
+number of breaches as repeated and is not required to take legal action in
+order for termination under this section to have effect.
+
+Termination of your permissions does not terminate permissions already received
+under this Licence by a person to whom you previously Distributed a compliant
+copy or Derivative Work, provided that person remains in compliance.
+
+## 19. Disclaimer of warranty
+
+To the extent permitted by applicable law, the Software is provided "as is" and
+"as available", without warranty or guarantee of any kind, express, implied or
+statutory, including warranties of merchantability, fitness for a particular
+purpose, title and non-infringement. You bear the risk of using, modifying and
+Distributing the Software.
+
+## 20. Limitation of liability
+
+To the extent permitted by applicable law, the Licensor and Contributors are
+not liable for any direct, indirect, special, incidental, consequential,
+exemplary or punitive loss, damage, claim, cost or other liability arising from
+the Software, this Licence, or the use, inability to use, modification or
+distribution of the Software, whether in contract, tort, negligence, strict
+liability or otherwise, even if advised of the possibility of that liability.
+
+Nothing in this Licence excludes or limits liability which applicable law does
+not permit to be excluded or limited.
+
+## 21. Severability
+
+If any provision of this Licence is held invalid or unenforceable, it is to be
+limited or reformed only to the minimum extent necessary to make it valid and
+enforceable where the law permits. If it cannot be so limited or reformed, that
+provision is severed. The remaining provisions continue in effect.
+
+## 22. No waiver
+
+A delay or failure by the Licensor to enforce a provision or respond to a breach
+does not waive that provision, waive any later breach, or prevent later
+enforcement. A waiver applies only where the Licensor gives it expressly in
+writing and only to the circumstances it identifies.

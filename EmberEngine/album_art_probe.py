@@ -37,8 +37,9 @@ try:
     from textual.widgets import Static
 except ModuleNotFoundError as exc:  # pragma: no cover - only happens before install
     raise SystemExit(
-        "Textual is not installed in this virtual environment. Run: "
-        "source .venv/bin/activate && pip install -r requirements-ui.txt"
+        "Textual is not installed in this virtual environment. Install the UI "
+        "dependencies as described in docs/INSTALLATION.md, for example: "
+        "source .venv/bin/activate && python -m pip install rich textual"
     ) from exc
 
 
@@ -63,14 +64,14 @@ DEFAULTS = {
     "waveform_samples": 160,
 }
 
-SOURCE_NONE = 0
-SOURCE_PLEX = 1
-SOURCE_BLUETOOTH = 2
-SOURCE_LOCAL = 3
-
-PLAY_STOPPED = 0
-PLAY_PLAYING = 1
-PLAY_PAUSED = 2
+from contracts import (  # noqa: E402
+    MEDIA_SOURCE_BLUETOOTH as SOURCE_BLUETOOTH,
+    MEDIA_SOURCE_MPRIS as SOURCE_LOCAL,
+    MEDIA_SOURCE_PLEX as SOURCE_PLEX,
+    PLAY_PAUSED,
+    PLAY_PLAYING,
+    PLAY_STOPPED,
+)
 
 TEXT_BUFFER = 192
 LYRIC_BUFFER = 256
@@ -945,7 +946,7 @@ class EmberUI(App[None]):
 
     def _heartbeats_text(self) -> str:
         """Return the heartbeats text result."""
-        now_ms = int(time.monotonic() * 1000)
+        now_ms = bus.monotonic_ms()
         services = [
             ("AUDIO", ["echo"]),
             ("PLAYER", ["minstrel"]),
@@ -959,7 +960,7 @@ class EmberUI(App[None]):
             ages = []
             for name in names:
                 stamp = bus.get_int(f"/proc/{name}/heartbeat_ms", 0)
-                ages.append((now_ms - stamp) / 1000.0 if stamp else 999.0)
+                ages.append(bus.elapsed_ms(now_ms, stamp) / 1000.0 if stamp else 999.0)
             age = max(ages)
             mark = "●" if age < 3.0 else "◐" if age < 10.0 else "×"
             lines.append(f"{label:<8} {mark}  {age:>4.1f}s")

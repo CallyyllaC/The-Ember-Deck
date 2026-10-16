@@ -23,6 +23,9 @@ reaction_process_cooldown_s: 15.0
 # configured number of records; it is not durable history.
 structured_log_path: logs/foundry.structured.jsonl
 ui_event_limit: 100
+# Rewrite the snapshot at most once per interval while it has new records;
+# critical events and shutdown flush immediately.
+ui_snapshot_interval_s: 1.0
 
 # Durable history contains priority-0 errors only. Files rotate monthly, roll
 # over at the size ceiling, and are deleted after roughly six months.

@@ -14,8 +14,11 @@ before making it fullscreen.
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
+import sys
+import tempfile
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -24,7 +27,9 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import yaml
 
 import synapse as bus
+from contracts import HDMI2_SOURCE_PLEX, HDMI2_SOURCE_RADIO, HDMI2_SOURCE_YOUTUBE
 from whisper_daemon import log_error, log_heartbeat, log_info
+from runtime_config import ConfigError, require_mapping, validate_hdmi2_source_controller
 
 DEFAULTS = {
     "proc_name": "hdmi2_source_controller",
@@ -45,9 +50,6 @@ DEFAULTS = {
     "heartbeat_s": 1.0,
 }
 
-HDMI2_SOURCE_PLEX = 1
-HDMI2_SOURCE_RADIO = 2
-HDMI2_SOURCE_YOUTUBE = 3
 SOURCE_ORDER = (HDMI2_SOURCE_PLEX, HDMI2_SOURCE_RADIO, HDMI2_SOURCE_YOUTUBE)
 SOURCE_NAMES = {
     HDMI2_SOURCE_PLEX: "PLEX",
@@ -73,20 +75,84 @@ def load_cfg() -> dict:
     path = Path(raw) if raw else Path(__file__).resolve().parent / "configs" / "hdmi2_source_controller.yaml"
     loaded: dict = {}
     if path.is_file():
-        loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        loaded = require_mapping("hdmi2_source_controller", yaml.safe_load(path.read_text(encoding="utf-8")))
     cfg = DEFAULTS.copy()
     cfg.update(loaded)
+    validate_hdmi2_source_controller(cfg)
     cfg["_config_path"] = str(path)
     return cfg
 
 
-def heartbeat(proc_name: str) -> None:
-    """Publish the component heartbeat and diagnostic event."""
-    now_ms = int(time.monotonic() * 1000)
-    bus.set_int(f"/proc/{proc_name}/heartbeat_ms", now_ms)
-    seq_key = f"/proc/{proc_name}/hb_seq"
-    bus.set_int(seq_key, bus.get_int(seq_key, 0) + 1)
-    log_heartbeat(proc_name)
+LABWC_BACKUP_SUFFIX = ".emberdeck.bak"
+# Pear declares product/window class YouTube Music. Wildcards are
+# case-insensitive in Labwc, covering package/name variants.
+PEAR_WINDOW_IDENTIFIER = "*youtube*music*"
+
+
+def rule_matches(rule: ET.Element, identifier: str) -> bool:
+    """Return whether ``rule`` is one of Ember Deck's own HDMI-2 rules."""
+    if rule.attrib.get("identifier") != identifier:
+        return False
+    actions = rule.findall("action")
+    return [action.attrib.get("name") for action in actions] == ["MoveToOutput", "ToggleFullscreen"]
+
+
+def parse_labwc_config(path: Path) -> ET.ElementTree:
+    """Parse rc.xml keeping comments, or start a minimal document if it is absent."""
+    if not path.exists():
+        return ET.ElementTree(ET.Element("labwc_config"))
+    parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
+    return ET.parse(path, parser=parser)
+
+
+def apply_ember_window_rules(root: ET.Element, identifiers: Sequence[str], output: str) -> bool:
+    """Ensure one move-then-fullscreen rule per identifier; return whether anything changed.
+
+    Only Ember Deck's own rules (exactly MoveToOutput + ToggleFullscreen for a
+    given identifier) are created or retargeted. Every other element and
+    comment is left as parsed; only whitespace inside <windowRules> is
+    normalised when a change is written.
+    """
+    rules = root.find("windowRules")
+    changed = False
+    if rules is None:
+        rules = ET.SubElement(root, "windowRules")
+        changed = True
+    for identifier in identifiers:
+        owned = next((rule for rule in rules.findall("windowRule") if rule_matches(rule, identifier)), None)
+        if owned is None:
+            owned = ET.SubElement(rules, "windowRule", {"identifier": identifier})
+            ET.SubElement(owned, "action", {"name": "MoveToOutput", "output": output})
+            ET.SubElement(owned, "action", {"name": "ToggleFullscreen"})
+            changed = True
+        else:
+            move = owned.find("action")
+            if move is not None and move.attrib.get("output") != output:
+                move.set("output", output)
+                changed = True
+    if changed:
+        ET.indent(rules, space="  ", level=1)
+    return changed
+
+
+def write_xml_atomically(tree: ET.ElementTree, path: Path) -> None:
+    """Replace ``path`` atomically, keeping its mode and one backup of the previous file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            tree.write(handle, encoding="utf-8", xml_declaration=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if path.exists():
+            shutil.copymode(path, tmp_name)
+            shutil.copy2(path, path.with_name(path.name + LABWC_BACKUP_SUFFIX))
+        else:
+            os.chmod(tmp_name, 0o644)
+        os.replace(tmp_name, path)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
 
 
 def counter_delta(previous: int, current: int) -> int:
@@ -106,7 +172,11 @@ class Hdmi2SourceController:
         self.running = True
         self.current = HDMI2_SOURCE_PLEX
         self.seen_cycle_seq = bus.get_int(KEY_CYCLE_SEQ, 0)
-        self.last_heartbeat_at = 0.0
+        self.heartbeat = bus.Heartbeat(
+            self.proc_name,
+            max(0.25, float(cfg.get("heartbeat_s", 1.0))),
+            on_beat=log_heartbeat,
+        )
         # Foundry restarts its worker group as one appliance. Do not let an old
         # graphical guest survive that reset while the new controller believes
         # the cold-boot source is Plex.
@@ -244,14 +314,6 @@ class Hdmi2SourceController:
             return False
         return self._launch([str(appimage), *[str(item) for item in self.cfg.get("pear_args", [])]])
 
-    @staticmethod
-    def _rule_matches(rule: ET.Element, identifier: str) -> bool:
-        """Return the rule matches result."""
-        if rule.attrib.get("identifier") != identifier:
-            return False
-        actions = rule.findall("action")
-        return [action.attrib.get("name") for action in actions] == ["MoveToOutput", "ToggleFullscreen"]
-
     def _reconfigure_labwc(self) -> None:
         """Reload Labwc rules even when Foundry lacks LABWC_PID in its env."""
         ok, _ = self._run([str(self.cfg.get("labwc_path", "labwc")), "--reconfigure"])
@@ -296,39 +358,14 @@ class Hdmi2SourceController:
             return
         identifiers = [
             str(self.cfg.get("shortwave_app_id", "de.haeckerfelix.Shortwave")),
-            # Pear declares product/window class YouTube Music. Wildcards are
-            # case-insensitive in Labwc, covering package/name variants.
-            "*youtube*music*",
+            PEAR_WINDOW_IDENTIFIER,
         ]
         try:
-            if rc_path.exists():
-                tree = ET.parse(rc_path)
-                root = tree.getroot()
-            else:
-                root = ET.Element("labwc_config")
-                tree = ET.ElementTree(root)
-            rules = root.find("windowRules")
-            if rules is None:
-                rules = ET.SubElement(root, "windowRules")
-
-            changed = False
-            for identifier in identifiers:
-                owned = next((rule for rule in rules.findall("windowRule") if self._rule_matches(rule, identifier)), None)
-                if owned is None:
-                    owned = ET.SubElement(rules, "windowRule", {"identifier": identifier})
-                    ET.SubElement(owned, "action", {"name": "MoveToOutput", "output": output})
-                    ET.SubElement(owned, "action", {"name": "ToggleFullscreen"})
-                    changed = True
-                else:
-                    move = owned.find("action")
-                    if move is not None and move.attrib.get("output") != output:
-                        move.set("output", output)
-                        changed = True
-
-            if not rc_path.exists() or changed:
-                rc_path.parent.mkdir(parents=True, exist_ok=True)
-                ET.indent(tree, space="  ")
-                tree.write(rc_path, encoding="utf-8", xml_declaration=True)
+            existed = rc_path.exists()
+            tree = parse_labwc_config(rc_path)
+            changed = apply_ember_window_rules(tree.getroot(), identifiers, output)
+            if not existed or changed:
+                write_xml_atomically(tree, rc_path)
                 self._reconfigure_labwc()
                 print(f"[{self.proc_name}] Labwc HDMI-2 rules ready: {output}", flush=True)
         except Exception as exc:
@@ -383,9 +420,7 @@ class Hdmi2SourceController:
                 self.startup_transition_pending = False
                 self._select(HDMI2_SOURCE_PLEX)
             self._consume_cycles()
-            if now - self.last_heartbeat_at >= max(0.25, float(self.cfg.get("heartbeat_s", 1.0))):
-                heartbeat(self.proc_name)
-                self.last_heartbeat_at = now
+            self.heartbeat.tick(now)
         log_info(self.proc_name, "stopped")
 
 
@@ -409,4 +444,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ConfigError as exc:
+        print(str(exc), file=sys.stderr, flush=True)
+        raise SystemExit(2) from None

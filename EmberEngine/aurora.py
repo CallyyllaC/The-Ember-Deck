@@ -20,6 +20,7 @@ from __future__ import annotations
 import colorsys
 import os
 import signal
+import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -33,9 +34,9 @@ from artwork_palette import (
     normalise_output_colours,
 )
 from whisper_daemon import log_heartbeat, log_info
+from runtime_config import ConfigError, require_mapping, validate_aurora
 
-MEDIA_SOURCE_PLEX = 1
-MEDIA_SOURCE_LOCAL = 3
+from contracts import MEDIA_SOURCE_MPRIS as MEDIA_SOURCE_LOCAL, MEDIA_SOURCE_PLEX
 CONTROL_BRIGHTNESS = "/io/in/control/brightness"
 CONTROL_COLOUR = "/io/in/control/colour"
 CONTROL_SATURATION = "/io/in/control/saturation"
@@ -98,10 +99,11 @@ def load_cfg() -> dict:
     loaded = {}
     if path and Path(path).is_file():
         with Path(path).open("r", encoding="utf-8") as fh:
-            loaded = yaml.safe_load(fh) or {}
+            loaded = require_mapping("aurora", yaml.safe_load(fh))
 
     cfg = DEFAULTS.copy()
     cfg.update(loaded)
+    validate_aurora(cfg)
 
     # Keep compatibility with the earlier config while retiring its confusing
     # value/alpha controls. Brightness now has one owner: Pawprint -> Aurora.
@@ -339,15 +341,6 @@ def publish_theme(
     bus.set_int(KEY_THEME_PALETTE_SEQ, bus.get_int(KEY_THEME_PALETTE_SEQ, 0) + 1)
 
 
-def heartbeat(proc_name: str) -> None:
-    """Publish the component heartbeat and diagnostic event."""
-    now_ms = int(time.monotonic() * 1000)
-    bus.set_int(f"/proc/{proc_name}/heartbeat_ms", now_ms)
-    key = f"/proc/{proc_name}/hb_seq"
-    bus.set_int(key, bus.get_int(key, 0) + 1)
-    log_heartbeat(proc_name)
-
-
 def main() -> None:
     """Configure and run the component until shutdown."""
     cfg = load_cfg()
@@ -370,7 +363,7 @@ def main() -> None:
     last_album_raw: Optional[List[Tuple[float, float, float]]] = None
     last_album_seen_at: Optional[float] = None
     next_tick = time.monotonic()
-    last_hb = 0.0
+    heartbeat = bus.Heartbeat(proc_name, on_beat=log_heartbeat)
 
     try:
         while not stopping:
@@ -421,13 +414,15 @@ def main() -> None:
                     False,
                 )
 
-            if now - last_hb >= 1.0:
-                heartbeat(proc_name)
-                last_hb = now
+            heartbeat.tick(now)
     finally:
         bus.close_all()
         log_info(proc_name, "stopped")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ConfigError as exc:
+        print(str(exc), file=sys.stderr, flush=True)
+        raise SystemExit(2) from None

@@ -57,7 +57,18 @@ from adafruit_ht16k33.matrix import Matrix16x8
 
 import synapse as bus
 from whisper_daemon import log_error, log_heartbeat, log_info, log_legacy, log_recovery
+from contracts import (
+    HDMI2_SOURCE_PLEX,
+    PLAY_PAUSED,
+    PLAY_PLAYING,
+    PLAY_STOPPED,
+    PLEX_CONNECTED,
+)
 from pawprint_logic import (
+    MEDIA_TARGET_BLUETOOTH,
+    MEDIA_TARGET_MPRIS,
+    MEDIA_TARGET_NONE,
+    MEDIA_TARGET_PLEX,
     DebounceState,
     MediaRoutingState,
     choose_media_target,
@@ -262,17 +273,12 @@ UI_DEV_CREATE = _io(ord("U"), 1)
 UI_DEV_DESTROY = _io(ord("U"), 2)
 
 
-# Pawprint keeps this intentionally tiny. Values are published as ints so a
-# future UI can display the route without teaching Synapse about strings.
-MEDIA_TARGET_NONE = 0
-MEDIA_TARGET_PLEX = 1
-MEDIA_TARGET_BLUETOOTH = 2
-MEDIA_TARGET_MPRIS = 3
-# Compatibility alias. The old numeric local route is now explicitly generic
+# Route targets are the shared /media/active_source values (contracts.py).
+# Compatibility alias: the old numeric local route is now explicitly generic
 # MPRIS, but keeping the symbol avoids breaking an out-of-tree helper.
 MEDIA_TARGET_LOCAL = MEDIA_TARGET_MPRIS
-PLEX_PLAYING = 1
-PLEX_PAUSED = 2
+PLEX_PLAYING = PLAY_PLAYING
+PLEX_PAUSED = PLAY_PAUSED
 
 MEDIA_TARGET_NAMES = {
     MEDIA_TARGET_NONE: "none",
@@ -310,9 +316,7 @@ KEY_MPRIS_POSITION_MS = "/mpris/position_ms"
 KEY_MPRIS_DURATION_MS = "/mpris/duration_ms"
 KEY_HDMI2_SELECTED_SOURCE = "/hdmi2/selected_source"
 KEY_HDMI2_CYCLE_SEQ = "/hdmi2/control/cycle_seq"
-HDMI2_SOURCE_PLEX = 1
-HDMI2_SOURCE_RADIO = 2
-HDMI2_SOURCE_YOUTUBE = 3
+KEY_PLEX_CONNECTION_STATE = "/plex/connection_state"
 
 MPRIS_CONTROL_KEYS = {
     "play": "/mpris/control/playpause_seq",
@@ -321,9 +325,9 @@ MPRIS_CONTROL_KEYS = {
     "rew": "/mpris/control/previous_seq",
 }
 
-BT_PLAY_STOPPED = 0
-BT_PLAY_PLAYING = 1
-BT_PLAY_PAUSED = 2
+BT_PLAY_STOPPED = PLAY_STOPPED
+BT_PLAY_PLAYING = PLAY_PLAYING
+BT_PLAY_PAUSED = PLAY_PAUSED
 
 PLEX_CONTROL_KEYS = {
     "play": "/plex/control/playpause_seq",
@@ -707,16 +711,6 @@ def finite_control(value: object, fallback: float) -> float:
     return clamp01(parsed) if math.isfinite(parsed) else fallback
 
 
-def heartbeat(proc_name: str) -> None:
-    """Publish the component heartbeat and diagnostic event."""
-    now_ms = int(time.monotonic() * 1000)
-    bus.set_int(f"/proc/{proc_name}/heartbeat_ms", now_ms)
-    key = f"/proc/{proc_name}/hb_seq"
-    bus.set_int(key, bus.get_int(key, 0) + 1)
-    bus.set_int("/io/health/heartbeat_seq", bus.get_int("/io/health/heartbeat_seq", 0) + 1)
-    log_heartbeat(proc_name)
-
-
 def status_note(proc_name: str, message: str) -> None:
     """Compatibility adapter for notes awaiting a machine-readable event."""
     log_legacy(proc_name, f"[{proc_name}] {message}")
@@ -818,7 +812,7 @@ class EventRing:
             self.seq = 1
         index = self.seq % self.capacity
         offset = index * EVENT_RECORD_WIDTH
-        now_ms_mod = int(time.monotonic() * 1000) & 0x7FFFFFFF
+        now_ms_mod = bus.monotonic_ms()
         bus.set_int("/io/events/seq", self.seq)
         self.records[offset:offset + EVENT_RECORD_WIDTH] = [
             self.seq,
@@ -1034,7 +1028,7 @@ class Pawprint:
             False: {"colour": PickupState(), "gain": PickupState()},
             True: {"colour": PickupState(), "gain": PickupState()},
         }
-        self.last_hb = 0.0
+        self.heartbeat = bus.Heartbeat(self.proc_name, on_beat=self._on_heartbeat)
         self.ads_read_fault_active = False
 
         # Pawprint-owned system status lamps.  The top five indicators are
@@ -1191,14 +1185,21 @@ class Pawprint:
             log_error(self.proc_name, "orderly shutdown request failed", repr(exc))
 
     def _plex_is_available(self, now: float) -> bool:
-        """Return the plex is available result."""
+        """Plex is available when Minstrel is alive *and* reports a live connection.
+
+        Minstrel now stays running while Plex is unconfigured or unreachable,
+        so its heartbeat alone no longer implies a usable Plex. A missing
+        connection-state key (an older Minstrel) is treated as connected.
+        """
         heartbeat_ms = bus.get_int("/proc/minstrel/heartbeat_ms", 0)
         if heartbeat_ms <= 0:
             return False
-        now_ms = int(now * 1000)
-        age_ms = now_ms - heartbeat_ms
+        now_ms = int(now * 1000) & bus.MS_CLOCK_MASK
+        age_ms = bus.elapsed_ms(now_ms, heartbeat_ms)
         max_age_ms = int(max(1.0, float(self.cfg.get("minstrel_heartbeat_stale_s", 5.0))) * 1000)
-        return 0 <= age_ms <= max_age_ms
+        if age_ms > max_age_ms:
+            return False
+        return bus.get_int(KEY_PLEX_CONNECTION_STATE, PLEX_CONNECTED) == PLEX_CONNECTED
 
     def _publish_bluetooth_metadata(self, state: BluetoothMediaState) -> None:
         """Publish Bluetooth data without ever leaving stale track text behind.
@@ -1278,7 +1279,7 @@ class Pawprint:
         self.last_media_target = target
         self.last_media_activity_at = now
         bus.set_int("/io/health/media_target", target)
-        bus.set_int("/io/health/media_last_activity_ms", int(now * 1000))
+        bus.set_int("/io/health/media_last_activity_ms", int(now * 1000) & bus.MS_CLOCK_MASK)
         bus.set_int(KEY_MEDIA_ACTIVE_SOURCE, target)
         if changed:
             bus.set_int("/io/health/media_target_seq", bus.get_int("/io/health/media_target_seq", 0) + 1)
@@ -1801,7 +1802,7 @@ class Pawprint:
         else:
             return 0
 
-        if state not in (PLEX_PLAYING, BT_PLAY_PAUSED) or duration <= 0.0:
+        if state not in (PLAY_PLAYING, PLAY_PAUSED) or duration <= 0.0:
             return 0
 
         fraction = max(0.0, min(1.0, float(position) / float(duration)))
@@ -1875,6 +1876,12 @@ class Pawprint:
             brightness=brightness,
         )
 
+    @staticmethod
+    def _on_heartbeat(proc_name: str) -> None:
+        """Pawprint also exposes a heartbeat counter in its own health namespace."""
+        bus.set_int("/io/health/heartbeat_seq", bus.get_int("/io/health/heartbeat_seq", 0) + 1)
+        log_heartbeat(proc_name)
+
     def _publish_status(self) -> None:
         """Publish status."""
         online = int(self.hardware.online)
@@ -1921,9 +1928,7 @@ class Pawprint:
             self._render_outputs(now)
             self.state_store.save_if_due(self.controls, float(self.cfg["state_save_interval_s"]), now)
 
-            if now - self.last_hb >= 1.0:
-                heartbeat(self.proc_name)
-                self.last_hb = now
+            self.heartbeat.tick(now)
 
         self.close()
 

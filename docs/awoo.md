@@ -40,3 +40,9 @@ For the fuller story, including considerably more questionable engineering decis
 - Plex, Bluetooth, DAB radio and YouTube Music source support
 - Full Plex integration
 - Bluetooth, DAB and YouTube Music metadata support when available
+
+## Licence
+
+The current version of The Ember Deck is available under
+[Awoo Licence v2.0](https://awoo.ltd/licence/). Third-party components and material remain subject to their own terms; see the repository's
+[third-party notices](../THIRD_PARTY_NOTICES.md). Project assets, including the demonstration videos and the third-party music heard in them, are described in [AWOO-ASSETS-DEFINITION.md](../AWOO-ASSETS-DEFINITION.md).

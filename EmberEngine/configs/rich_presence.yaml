@@ -1,0 +1,67 @@
+# Discord Rich Presence: an optional Ember Deck integration, available to
+# everyone. With enabled: false or no application_id this worker stays idle:
+# it never starts the Discord bridge and never contacts Discord. Nothing else
+# in Ember Deck depends on it.
+#
+# This file is the portable, shipped template. Put this Deck's own values
+# (application_id, enabled: true, paths, preferences) in the gitignored
+# rich_presence.local.yaml beside it; it is merged on top of this file.
+# Setup guide: docs/ENABLING_DISCORD_RICH_PRESENCE.md
+proc_name: rich_presence
+enabled: false
+
+discord:
+  # The Ember Deck Discord application's numeric ID (not a secret). There is
+  # no client secret anywhere on the Deck: the application is a Public Client.
+  application_id: null
+
+  # auto: a native bridge built for this CPU, else an x86_64 bridge under Box64.
+  backend: auto
+  # Paths are relative to EmberEngine/ unless absolute.
+  native_bridge: discord_bridge/build/discord_bridge
+  sdk_library_dir: null
+  box64:
+    executable: box64
+    bridge: discord_bridge/build-x86_64/discord_bridge
+
+  # Discord access/refresh tokens (gitignored, mode 0600), relative to this directory.
+  auth_state_path: discord_secrets.yaml
+
+  request_timeout_s: 5.0
+  retry_initial_s: 5.0
+  retry_max_s: 300.0
+  # Stop waiting for Discord authorization approval after this long.
+  auth_timeout_s: 900.0
+  # Renew the access token this long before it expires.
+  refresh_margin_s: 86400.0
+
+presence:
+  # Two states: Idle, or Listening on Plex, DAB, YT Music or Bluetooth.
+  # Conservative defaults: show that the Deck is playing and through which
+  # source (small source icon), but not what. Title, artist/station/playlist
+  # and album appear only if show_media_metadata.
+  show_source: true
+  show_media_metadata: false
+  show_idle: true
+  # "listening" (supported since Social SDK 1.5) or "playing".
+  activity_type: listening
+  # Large image. Static assets (ember-deck, source-*) unless "on".
+  #   off:   static only.
+  #   audit: static only; also logs sanitised artwork classifications per
+  #          source (journalctl "artwork_audit"). Never sends artwork URLs.
+  #   on:    DAB and YT Music may show their own artwork (the public https
+  #          URL their player publishes) when show_media_metadata and
+  #          show_source are true. URLs with credentials, tokens or signed
+  #          access, local/private addresses or non-https schemes are
+  #          rejected. Plex needs minstrel.yaml public_artwork_lookup: true
+  #          (agent-supplied posters only); Bluetooth stays static. Anything rejected
+  #          falls back to ember-deck; journalctl shows "artwork_selection".
+  artwork_mode: audit
+  # Clicking the large image (artwork) or the small source icon opens this
+  # page, and the large image's tooltip reads "Explore The Ember Deck". The
+  # source icon keeps its own tooltip. https only, at most 256 characters.
+  # null or "" turns the links off (tooltip "The Ember Deck"); an unusable URL
+  # does the same and logs "presence_links_disabled". Read at worker start.
+  project_url: https://awoo.ltd/projects/ember-deck
+  update_debounce_s: 2.0
+  min_update_interval_s: 5.0

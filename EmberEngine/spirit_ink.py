@@ -148,6 +148,11 @@ MEDIA_TEMPLATES = {
 }
 
 EVENT_POOLS = {
+    # Discord Rich Presence diagnostics: plain on purpose, so journalctl shows
+    # the (fixed-word, already sanitised) details verbatim.
+    "artwork_audit": ["{process} artwork {audit}"],
+    "artwork_selection": ["{process} artwork {decision}"],
+    "discord_sdk_loaded": ["{process} discord_sdk_loaded sdk={sdk_version} backend={backend}"],
     "connected": [
         "{process} has a line into {server}.",
         "{process} finds {server} willing to answer.",

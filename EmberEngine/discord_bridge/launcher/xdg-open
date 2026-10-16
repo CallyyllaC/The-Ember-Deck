@@ -1,0 +1,36 @@
+#!/bin/sh
+# Ember Deck: detached xdg-open for the Discord Social SDK (Box64 backend only).
+#
+# During Client::Authorize the SDK forks, runs "xdg-open <authorize URL>" and
+# waits for that child to exit before it services its own loopback OAuth
+# callback. On a Raspberry Pi 5 (SDK 1.10.19337 under Box64) the real
+# xdg-open stayed alive while the browser ran, so the callback was never
+# processed until xdg-open was killed by hand.
+#
+# discord_ipc.py puts this directory first on PATH for the Box64 bridge only
+# and sets EMBERDECK_XDG_OPEN to the system xdg-open it resolved. This script
+# starts that opener fully detached (new session, stdin/stdout/stderr on
+# /dev/null, re-parented away from the bridge) and exits at once, so the SDK
+# continues. The desktop's normal default-browser handling is unchanged.
+#
+# The URL carries OAuth state and the PKCE challenge: it is passed through
+# as "$@" exactly and is never printed, logged or stored.
+
+real=${EMBERDECK_XDG_OPEN:-}
+case $real in
+    /*) ;;
+    *) exit 3 ;;                       # not configured: refuse rather than guess
+esac
+if [ ! -x "$real" ] || [ "$real" -ef "$0" ]; then
+    exit 3                             # missing, or would call itself
+fi
+
+# The subshell exits immediately after starting the opener in the
+# background, so this script returns at once and the opener is re-parented
+# (to init or the session's subreaper), which reaps it: no zombie is left.
+if command -v setsid >/dev/null 2>&1; then
+    ( setsid "$real" "$@" </dev/null >/dev/null 2>&1 & )
+else
+    ( "$real" "$@" </dev/null >/dev/null 2>&1 & )
+fi
+exit 0

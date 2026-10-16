@@ -1,0 +1,31 @@
+# Local artwork origin for Discord Rich Presence (optional).
+#
+# When enabled, Minstrel keeps each Plex cover it already downloads as a
+# 512x512 PNG in a persistent cache, and this worker serves those images (and
+# nothing else) on http://127.0.0.1:<port>. A Cloudflare Tunnel that you set
+# up publishes them as
+#     <public_base_url>/<album>-<artist>.png?v=<content version>
+# so Discord can show the real album cover without seeing Plex, its address or
+# its token. These URLs are public and guessable from album names.
+# Setup guide: docs/ENABLING_DISCORD_RICH_PRESENCE.md
+#
+# Disabled: nothing listens, Minstrel keeps its original tiny artwork request,
+# and Rich Presence uses its other artwork options.
+proc_name: artwork_service
+enabled: false
+
+# Local port only; the service always binds to 127.0.0.1.
+port: 8765
+
+# The public HTTPS origin your Cloudflare Tunnel serves (no path), e.g.
+# https://artwork.example.org. Required when enabled; set it (and enabled: true)
+# in the gitignored artwork_service.local.yaml.
+public_base_url: null
+
+# Persistent private cache (directory 0700, files 0600). ~ expands.
+cache_dir: ~/.cache/emberdeck/artwork
+
+# Cache size limit. Covers never expire by age; above this the least recently
+# used ones are removed (and regenerated when that album plays again).
+# 2048 MB holds several thousand 512x512 covers.
+max_cache_mb: 2048
