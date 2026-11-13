@@ -6,6 +6,7 @@
 - A Bluetooth phone or local player reporting an out-of-range position, length or track number no longer stops Pawprint or the MPRIS bridge (and with them the whole worker group); such values are shown as unknown.
 - The REC-hold source cycle no longer sticks when a guest app (such as Pear) cannot be launched: HDMI-2 returns to Plex and the next hold moves on.
 - Removed README and installation links to an architecture document that is not part of the repository.
+- A network blip or Plex server error no longer stops Minstrel using its cached Plex token until the next account login; only a token the server rejects (HTTP 401/403) is set aside. A connection error through a `*.plex.direct` address is no longer mistaken for a rejected login because its host name contains "401" or "403".
 
 ---
 

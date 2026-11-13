@@ -29,6 +29,14 @@ import secret_store  # noqa: E402
 
 PASSWORD = "correct-horse-battery"
 TOKEN = "cachedTOKEN123"
+# A requests/urllib3 timeout through a *.plex.direct host, whose hex id
+# happens to contain both "401" and "403".
+PLEX_DIRECT_TIMEOUT = (
+    "HTTPSConnectionPool(host='192-168-1-20.9e4013a40373c5d2b1f0e6a7c8d9e0f1.plex.direct', port=32400): "
+    "Max retries exceeded with url: /status/sessions (Caused by ConnectTimeoutError("
+    "<urllib3.connection.HTTPSConnection object at 0x7f40312403e0>, 'Connection to "
+    "192-168-1-20.9e4013a40373c5d2b1f0e6a7c8d9e0f1.plex.direct timed out. (connect timeout=5.0)'))"
+)
 
 
 class Unauthorized(Exception):
@@ -43,6 +51,9 @@ class PlexWorld:
         self.server_name = server_name
         self.valid_tokens = set(valid_tokens)
         self.down = False
+        self.internet_down = False  # plex.tv unreachable while the LAN server may be up
+        self.server_error = None  # exception the LAN server raises instead of answering
+        self.url = "https://media.local:32400"  # where the server actually is
         self.logins = 0
         self.token_attempts = []
         self.issued = 0
@@ -51,8 +62,10 @@ class PlexWorld:
         world = self
 
         def sections():
-            if world.down:
+            if world.down or url != world.url:
                 raise ConnectionError(f"Max retries exceeded with url: /library/sections?X-Plex-Token={token}")
+            if world.server_error is not None:
+                raise world.server_error
             if token not in world.valid_tokens:
                 raise Unauthorized(f"(401) unauthorized; {url}/library/sections?X-Plex-Token={token}")
             return []
@@ -66,7 +79,7 @@ class PlexWorld:
 
     def account_factory(self, username, password, timeout=None):
         self.logins += 1
-        if self.down:
+        if self.down or self.internet_down:
             raise ConnectionError("plex.tv unreachable")
         if password != self.password:
             raise Unauthorized(f"(401) unauthorized; invalid credentials for {username}/{password}")
@@ -77,7 +90,7 @@ class PlexWorld:
                 world.issued += 1
                 token = f"freshTOKEN{world.issued:03d}"
                 world.valid_tokens.add(token)
-                return world.server("https://media.local:32400", token)
+                return world.server(world.url, token)
 
         def resource(name):
             if name != world.server_name:
@@ -213,6 +226,53 @@ class SecretFileTests(AuthTestCase):
         self.assertEqual([p.name for p in self.tmp.iterdir()], [plex_auth.SECRETS_FILENAME])
 
 
+class AuthFailureDetectionTests(unittest.TestCase):
+    """``is_auth_failure`` decides whether a cached token is given up."""
+
+    def response_error(self, status, text="request failed"):
+        return _ResponseError(status, text)
+
+    def test_plexapi_401_and_403_are_rejections(self):
+        # plexapi's format: "(<status>) <codename>; <url> <body>"
+        self.assertTrue(plex_auth.is_auth_failure(Unauthorized(
+            "(401) unauthorized; https://192-168-1-20.abc.plex.direct:32400/library/sections <html>401 Unauthorized</html>")))
+        self.assertTrue(plex_auth.is_auth_failure(Exception(
+            "(403) forbidden; https://plex.tv/api/v2/users/signin ")))
+
+    def test_attached_http_response_decides(self):
+        self.assertTrue(plex_auth.is_auth_failure(self.response_error(401)))
+        self.assertTrue(plex_auth.is_auth_failure(self.response_error(403)))
+        self.assertFalse(plex_auth.is_auth_failure(self.response_error(503, "503 Server Error: unauthorized proxy")))
+
+    def test_other_statuses_are_not_rejections_even_with_auth_words_in_the_body(self):
+        for message in ("(404) not_found; https://media.local:32400/library/sections ",
+                        "(429) too_many_requests; https://plex.tv/api/v2/users/signin ",
+                        "(500) internal_server_error; https://media.local:32400/status/sessions Unauthorized access log full"):
+            self.assertFalse(plex_auth.is_auth_failure(Exception(message)), message)
+
+    def test_digits_inside_hosts_ports_and_addresses_are_not_rejections(self):
+        for exc in (ConnectionError(PLEX_DIRECT_TIMEOUT),
+                    ConnectionError("Max retries exceeded with url: https://10.0.0.5:32401/library/sections"),
+                    ConnectionError("[Errno 111] Connection refused (pid 4031)"),
+                    TimeoutError("read timed out after 4.03 s"),
+                    OSError(-3, "Temporary failure in name resolution")):
+            self.assertFalse(plex_auth.is_auth_failure(exc), str(exc))
+
+    def test_rejection_wording_without_a_status_is_still_recognised(self):
+        for message in ("401 Client Error: Unauthorized for url: https://plex.tv/users/account",
+                        "Invalid credentials", "The token is invalid", "Not authorized to access this server",
+                        "Authentication required"):
+            self.assertTrue(plex_auth.is_auth_failure(Exception(message)), message)
+
+
+class _ResponseError(Exception):
+    """Like ``requests.HTTPError``: the response is attached."""
+
+    def __init__(self, status, text="request failed"):
+        super().__init__(text)
+        self.response = SimpleNamespace(status_code=status)
+
+
 @unittest.skipUnless(has_module("yaml"), "PyYAML required")
 class ReauthenticationTests(AuthTestCase):
     def setUp(self):
@@ -296,6 +356,70 @@ class ReauthenticationTests(AuthTestCase):
         connector.poll(7.0)
         self.assertEqual(self.world.logins, 0)
         self.assertEqual(connector.state, contracts.PLEX_CONNECTED)
+
+    def test_unreachable_server_does_not_disable_the_cached_token(self):
+        # The LAN server reboots while plex.tv is also unreachable. Once the
+        # server is back, the cached token must be used again even though
+        # the account login is still failing.
+        self.world.down = True
+        connector = self.connector()
+        self.assertIsNone(connector.poll(0.0))
+        self.assertFalse(connector.token_rejected)
+        self.assertEqual(connector.state, contracts.PLEX_UNAVAILABLE)
+
+        self.world.down = False
+        self.world.internet_down = True
+        self.assertIsNotNone(connector.poll(connector.next_attempt_at))
+        self.assertEqual(connector.state, contracts.PLEX_CONNECTED)
+        self.assertEqual(self.world.token_attempts, [TOKEN, TOKEN])
+        self.assertEqual(self.cached_token(), TOKEN, "the cache is left alone")
+        self.assertIn("plex_token_unreachable_trying_account_login", self.events())
+        self.assertNotIn("plex_token_rejected_trying_account_login", self.events())
+
+    def test_server_errors_and_timeouts_keep_the_token(self):
+        connector = self.connector()
+        self.world.internet_down = True
+        for error in (TimeoutError("timed out"), Unauthorized("(503) service_unavailable; https://media.local:32400/library/sections"),
+                      Unauthorized("(404) not_found; https://media.local:32400/library/sections")):
+            self.world.server_error = error
+            connector.poll(connector.next_attempt_at)
+            self.assertFalse(connector.token_rejected, repr(error))
+            self.assertEqual(connector.state, contracts.PLEX_UNAVAILABLE, repr(error))
+        self.world.server_error = None
+        self.assertIsNotNone(connector.poll(connector.next_attempt_at))
+        self.assertEqual(self.world.token_attempts, [TOKEN] * 4)
+
+    def test_moved_server_is_found_through_the_account_without_rejecting_the_token(self):
+        # A connection failure with the internet up still tries the account
+        # in the same attempt (unchanged behaviour), which yields the
+        # server's new address.
+        self.world.url = "https://media.moved:32400"
+        connector = self.connector()
+        self.assertIsNotNone(connector.poll(0.0))
+        self.assertEqual(self.world.logins, 1)
+        self.assertFalse(connector.token_rejected)
+        import yaml
+        cache = yaml.safe_load(self.secrets.read_text(encoding="utf-8"))["cache"]
+        self.assertEqual(cache, {"url": "https://media.moved:32400", "token": "freshTOKEN001"})
+
+    def test_rejected_token_is_not_retried_while_login_keeps_failing(self):
+        self.world.valid_tokens.clear()
+        self.world.internet_down = True
+        connector = self.connector()
+        connector.poll(0.0)
+        self.assertTrue(connector.token_rejected)
+        connector.poll(connector.next_attempt_at)
+        self.assertEqual(self.world.token_attempts, [TOKEN], "a rejected token is tried once")
+        self.assertIn("plex_token_rejected_trying_account_login", self.events())
+
+    def test_lost_connection_through_a_plex_direct_host_is_not_an_auth_failure(self):
+        connector = self.connector()
+        connector.poll(0.0)
+        connector.connection_lost(ConnectionError(PLEX_DIRECT_TIMEOUT), 5.0)
+        self.assertEqual(connector.state, contracts.PLEX_UNAVAILABLE)
+        self.assertFalse(connector.token_rejected)
+        connector.poll(connector.next_attempt_at)
+        self.assertEqual((self.world.logins, connector.state), (0, contracts.PLEX_CONNECTED))
 
     def test_state_write_failure_keeps_the_session(self):
         self.world.valid_tokens.clear()

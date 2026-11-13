@@ -112,7 +112,7 @@ cache:              # Minstrel's; rewritten atomically after each account login
   token: null
 ```
 
-Precedence: `EMBERDECK_PLEX_USERNAME`/`_PASSWORD` → secrets `credentials` → legacy values still in `minstrel.yaml` (honoured but reported). The direct `url`+`token` pair: `EMBERDECK_PLEX_URL`/`_TOKEN` → secrets `cache` → legacy YAML. A token is only tried first for a fast start; if it fails and credentials exist, Minstrel logs in with the username and password, saves the fresh token to `cache`, and carries on. Environment values are never written to the file.
+Precedence: `EMBERDECK_PLEX_USERNAME`/`_PASSWORD` → secrets `credentials` → legacy values still in `minstrel.yaml` (honoured but reported). The direct `url`+`token` pair: `EMBERDECK_PLEX_URL`/`_TOKEN` → secrets `cache` → legacy YAML. A token is only tried first for a fast start; if it fails and credentials exist, Minstrel logs in with the username and password, saves the fresh token to `cache`, and carries on. Only a token the server rejects (HTTP 401 or 403) is set aside until that login succeeds; after a timeout, a refused connection or a server error the token is tried again on the next attempt, so an internet outage cannot keep Minstrel off a LAN server whose cached token still works. Environment values are never written to the file.
 
 A valid configuration without Plex identity or credentials does not stop Minstrel: it runs **unconfigured** (Plex shown as stopped, one actionable error, rechecked every 30 s). Wrong credentials or an unreachable server are retried with backoff. Only malformed `minstrel.yaml` stops it.
 

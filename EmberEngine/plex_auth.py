@@ -22,10 +22,14 @@ Precedence, highest first, per value:
 * ``server_name`` and ``plex_client_name``: ``minstrel.yaml``, overridden by
   their ``EMBERDECK_PLEX_*`` variables (applied by ``minstrel.load_cfg``).
 
-A token is only ever a shortcut. If it fails and account credentials exist, it
-is marked unusable and the account login runs at once; the fresh token then
-replaces the cache. A stale token can therefore cost one failed request, but
-can never block a working username/password.
+A token is only ever a shortcut. If it fails and account credentials exist, the
+account login runs at once and the fresh token then replaces the cache. Only a
+token the server rejects (HTTP 401/403, see ``is_auth_failure``) is marked
+unusable until a login succeeds; after a timeout, refused connection or server
+error the token is tried again on the next attempt, so an outage of plex.tv
+cannot keep Minstrel off a LAN server whose cached URL and token still work.
+A stale token can therefore cost one failed request, but can never block a
+working username/password.
 """
 
 from __future__ import annotations
@@ -75,19 +79,41 @@ def new_redactor() -> Redactor:
     return Redactor([PLEX_TOKEN_QUERY])
 
 
-def is_auth_failure(exc: Exception) -> bool:
-    """Return True when Plex rejected credentials or a token.
+AUTH_STATUS_CODES = (401, 403)
 
-    plexapi does not use one consistent exception type for every 401 path, so
-    inspect both an attached HTTP response and the message text.
-    """
+# plexapi formats every HTTP error as "(<status>) <codename>; <url> <body>".
+_PLEXAPI_STATUS = re.compile(r"\s*\((\d{3})\)\s+[a-z_]+;")
+# Words that mean a rejection when no status code is available. Bare status
+# digits are deliberately absent: hosts such as *.plex.direct carry a long hex
+# id, so "401" or "403" can appear inside any network error.
+_AUTH_PHRASES = re.compile(
+    r"\b(?:unauthori[sz]ed|forbidden|not authori[sz]ed|authentication"
+    r"|token is invalid|token invalid|invalid credentials)\b",
+    re.IGNORECASE,
+)
+
+
+def _status_code(exc: Exception) -> Optional[int]:
     response = getattr(exc, "response", None)
-    if getattr(response, "status_code", None) in (401, 403):
-        return True
-    text = str(exc).lower()
-    markers = ("401", "403", "unauthorized", "forbidden", "not authorized",
-               "authentication", "token is invalid", "token invalid", "invalid credentials")
-    return any(marker in text for marker in markers)
+    status = getattr(response, "status_code", None)
+    if isinstance(status, int) and not isinstance(status, bool):
+        return status
+    match = _PLEXAPI_STATUS.match(str(exc))
+    return int(match.group(1)) if match else None
+
+
+def is_auth_failure(exc: Exception) -> bool:
+    """Return True only when Plex rejected credentials or a token.
+
+    An HTTP status, from an attached response or plexapi's "(401) unauthorized;"
+    prefix, decides on its own: 401 and 403 are rejections, anything else (404,
+    429, 5xx) is not. Without a status the message must contain a rejection
+    phrase. Timeouts, refused connections and DNS errors are never rejections.
+    """
+    status = _status_code(exc)
+    if status is not None:
+        return status in AUTH_STATUS_CODES
+    return bool(_AUTH_PHRASES.search(str(exc)))
 
 
 def secrets_path_for(cfg: Mapping[str, Any]) -> Path:
@@ -381,8 +407,14 @@ class PlexConnector:
                 if not auth.has_account:
                     self._failed(exc, now, login=False)
                     return
-                self.token_rejected = True
-                log_info(self.proc_name, "plex_token_rejected_trying_account_login")
+                if is_auth_failure(exc):
+                    self.token_rejected = True
+                    log_info(self.proc_name, "plex_token_rejected_trying_account_login")
+                else:
+                    # The server may have moved or be briefly down. Try the
+                    # account (which also finds a new address) for this
+                    # attempt, but keep the token for the next one.
+                    log_info(self.proc_name, "plex_token_unreachable_trying_account_login")
 
         try:
             account = self.account_factory(auth.username, auth.password, timeout=timeout)
