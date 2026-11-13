@@ -296,7 +296,7 @@ Every file in `configs/` that a worker or the UI reads at start (`pawprint.yaml`
 | `ambient_after_real_event_delay` | seconds | `30` | Quiet period after real activity. |
 | `ambient_after_startup_delay` | seconds | `45` | Quiet period after startup. |
 | `ambient_queue_limit` | records | `3` | Bound on pending ambient messages. |
-| `error_dedupe_cooldown_s` | seconds | `60` | Repeated identical fault suppression interval. |
+| `error_dedupe_cooldown_s` | seconds | `60` | Repeated identical fault suppression interval. Also how long a one-off error (a rejected command, a launch that did not start) keeps Whisper's mood "wounded" after it last happened; ongoing faults such as a missing I²C device or audio capture last until their recovery is reported. |
 | `reaction_min_delay_s`, `reaction_max_delay_s` | seconds | `2`, `8` | Delayed reaction interval bounds. |
 | `reaction_max_per_event` | count | `2` | Maximum generated reactions per event. |
 | `reaction_global_cooldown_s`, `reaction_process_cooldown_s` | seconds | `5`, `15` | Reaction rate limits. |

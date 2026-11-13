@@ -1589,7 +1589,7 @@ def consume_plex_control_requests(server, cfg, seen: dict, proc_name: str) -> No
                 bus.set_int(KEY_CONTROL_LAST_COMMAND, PLEX_CONTROL_CODES[command])
                 bus.set_int(KEY_CONTROL_LAST_OK, 0)
                 bus.set_int(KEY_CONTROL_LAST_SEQ, current)
-                log_error(proc_name, "Plex control command failed", f"{command}: {redact_plex_token(exc)}")
+                log_error(proc_name, "Plex control command failed", f"{command}: {redact_plex_token(exc)}", transient=True)
                 break
 
 
@@ -1629,7 +1629,7 @@ def discard_plex_control_requests(seen: dict, proc_name: str, reason: str) -> No
         bus.set_int(KEY_CONTROL_LAST_OK, 0)
         bus.set_int(KEY_CONTROL_LAST_SEQ, current)
         log_error(proc_name, "Plex control command failed", f"{command}: {reason}",
-                  dedupe_key=f"{proc_name}:plex_control_unavailable")
+                  dedupe_key=f"{proc_name}:plex_control_unavailable", transient=True)
 
 
 def main():

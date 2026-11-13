@@ -278,7 +278,7 @@ class Hdmi2SourceController:
         runtime = Path(env["XDG_RUNTIME_DIR"])
         wayland_socket = runtime / env["WAYLAND_DISPLAY"]
         if not wayland_socket.exists():
-            log_error(self.proc_name, "graphical session unavailable", str(wayland_socket))
+            log_error(self.proc_name, "graphical session unavailable", str(wayland_socket), transient=True)
             return False
         try:
             subprocess.Popen(
@@ -291,7 +291,7 @@ class Hdmi2SourceController:
             )
             return True
         except OSError as exc:
-            log_error(self.proc_name, "guest launch failed", repr(exc))
+            log_error(self.proc_name, "guest launch failed", repr(exc), transient=True)
             return False
 
     def _launch_shortwave(self) -> bool:
@@ -308,10 +308,10 @@ class Hdmi2SourceController:
         if self._is_running(pattern):
             return True
         if not appimage.is_file():
-            log_error(self.proc_name, "Pear AppImage missing", str(appimage))
+            log_error(self.proc_name, "Pear AppImage missing", str(appimage), transient=True)
             return False
         if not os.access(appimage, os.X_OK):
-            log_error(self.proc_name, "Pear AppImage is not executable", str(appimage))
+            log_error(self.proc_name, "Pear AppImage is not executable", str(appimage), transient=True)
             return False
         return self._launch([str(appimage), *[str(item) for item in self.cfg.get("pear_args", [])]])
 

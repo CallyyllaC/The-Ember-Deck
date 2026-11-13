@@ -170,5 +170,107 @@ class ManagerRoundTripTests(unittest.TestCase):
             self.assertEqual(len(error_files), 1)
 
 
+class TransientFaultTests(unittest.TestCase):
+    """One-off errors stop holding the "wounded" mood once they go quiet (E-8)."""
+
+    def setUp(self):
+        self.cfg = dict(whisper_daemon.DEFAULTS, error_dedupe_cooldown_s=60.0)
+        self.scheduler = whisper_daemon.WhisperScheduler(self.cfg, now=0.0)
+        self.sent = RecordingQueue()
+        patcher = mock.patch.object(whisper_daemon, "QUEUE", self.sent)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def error(self, summary, now, **kwargs):
+        whisper_daemon.log_error("pawprint", summary, "detail", **kwargs)
+        message = whisper_daemon._coerce_message(self.sent.items.pop())
+        self.scheduler.enqueue(message, now=now)
+        return message
+
+    def test_transient_error_expires_after_a_quiet_cooldown(self):
+        self.error("Plex media command rejected", 10.0, transient=True)
+        self.assertEqual(self.scheduler.mood(now=10.0), "wounded")
+        self.assertEqual(self.scheduler.mood(now=69.0), "wounded")
+        self.assertNotEqual(self.scheduler.mood(now=70.0), "wounded")
+        self.scheduler.pop_next(now=71.0)
+        self.assertEqual(self.scheduler.faults, {}, "expired transient faults are dropped")
+
+    def test_repeats_keep_a_transient_error_open(self):
+        self.error("Bluetooth media refresh failed", 0.0, transient=True)
+        for now in (30.0, 60.0, 90.0):  # suppressed duplicates still count as seen
+            self.error("Bluetooth media refresh failed", now, transient=True)
+        self.assertEqual(self.scheduler.mood(now=140.0), "wounded")
+        self.assertNotEqual(self.scheduler.mood(now=150.0), "wounded")
+
+    def test_duplicate_summary_is_still_reported_before_the_fault_is_dropped(self):
+        self.error("MPRIS command rejected", 0.0, transient=True)
+        self.error("MPRIS command rejected", 5.0, transient=True)
+        self.scheduler.pop_next(now=0.0)  # the first error itself
+        summary = self.scheduler.pop_next(now=70.0)
+        self.assertIsNotNone(summary)
+        self.assertEqual(self.scheduler.faults, {})
+
+    def test_ordinary_errors_still_need_a_recovery(self):
+        self.error("I2C peripheral missing", 0.0, dedupe_key="pawprint:i2c")
+        self.scheduler.pop_next(now=10_000.0)
+        self.assertEqual(self.scheduler.mood(now=10_000.0), "wounded")
+        whisper_daemon.log_recovery("pawprint", "i2c_connection_recovered", recovers_key="pawprint:i2c")
+        self.scheduler.enqueue(whisper_daemon._coerce_message(self.sent.items.pop()), now=10_001.0)
+        self.assertNotEqual(self.scheduler.mood(now=10_001.0), "wounded")
+
+    def test_one_open_fault_of_either_kind_keeps_the_mood(self):
+        self.error("I2C peripheral missing", 0.0, dedupe_key="pawprint:i2c")
+        self.error("Plex media command rejected", 0.0, transient=True)
+        self.assertEqual(self.scheduler.mood(now=500.0), "wounded")
+
+    def test_flag_crosses_the_queue_and_is_absent_by_default(self):
+        transient = self.error("guest launch failed", 0.0, transient=True)
+        ordinary = self.error("I2C connection failed", 0.0)
+        self.assertIs(transient.metadata.get("transient"), True)
+        self.assertNotIn("transient", ordinary.metadata)
+
+
+class TransientCallSiteTests(unittest.TestCase):
+    """transient=True is only for single failed actions, never a persisting condition."""
+
+    # Reported once and then held until a recovery (or a restart): never transient.
+    # (Will-o'-Wisp's BlinkStick errors go through its report() helper, which
+    # never passes transient, so they do not appear here by summary.)
+    PERSISTENT = {
+        "I2C peripheral missing", "I2C connection failed", "ADS1115 read failed",
+        "audio capture unavailable", "audio capture stopped",
+        "Labwc HDMI-2 output is blank", "Labwc rule install failed",
+        "Artwork service could not listen", "Artwork service configuration ignored",
+        "Whisper log manager died", "worker_restart",
+    }
+
+    def calls(self):
+        import ast
+        found = []
+        for path in sorted(ENGINE.glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "log_error":
+                    summary = node.args[1].value if len(node.args) > 1 and isinstance(node.args[1], ast.Constant) else None
+                    transient = any(k.arg == "transient" and getattr(k.value, "value", False) is True
+                                    for k in node.keywords)
+                    found.append((path.name, summary, transient))
+        return found
+
+    def test_persistent_conditions_are_never_transient(self):
+        calls = self.calls()
+        seen = {summary for _, summary, _ in calls}
+        self.assertTrue(self.PERSISTENT <= seen, self.PERSISTENT - seen)
+        wrong = [(name, summary) for name, summary, transient in calls if transient and summary in self.PERSISTENT]
+        self.assertEqual(wrong, [])
+
+    def test_the_one_off_failures_are_transient(self):
+        transient = {summary for _, summary, flag in self.calls() if flag}
+        for summary in ("Plex media command rejected", "Bluetooth media command failed", "MPRIS command rejected",
+                        "guest launch failed", "Pear AppImage missing", "Plex control command failed",
+                        "virtual media key setup failed", "orderly shutdown request failed"):
+            self.assertIn(summary, transient)
+
+
 if __name__ == "__main__":
     unittest.main()

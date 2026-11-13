@@ -604,7 +604,7 @@ class MprisBridge:
             bus.set_int(KEY_ART_VALID, 1)
             bus.set_int(KEY_ART_SEQ, (bus.get_int(KEY_ART_SEQ, 0) + 1) & 0x7FFFFFFF)
         except Exception as exc:
-            log_error(self.proc_name, "MPRIS artwork unavailable", repr(exc))
+            log_error(self.proc_name, "MPRIS artwork unavailable", repr(exc), transient=True)
             self._clear_art()
 
     def _consume_controls(self) -> None:
@@ -628,7 +628,7 @@ class MprisBridge:
                     bus.set_int(KEY_CONTROL_LAST_COMMAND, CONTROL_CODES[name])
                     bus.set_int(KEY_CONTROL_LAST_OK, 0)
                     bus.set_int(KEY_CONTROL_LAST_SEQ, current)
-                    log_error(self.proc_name, "MPRIS command rejected", f"{name}: no selected player")
+                    log_error(self.proc_name, "MPRIS command rejected", f"{name}: no selected player", transient=True)
                     break
                 ok, detail = self._run([
                     str(self.cfg["playerctl_path"]),
@@ -644,7 +644,7 @@ class MprisBridge:
                     bus.set_int(KEY_CONTROL_LAST_COMMAND, CONTROL_CODES[name])
                     bus.set_int(KEY_CONTROL_LAST_OK, 0)
                     bus.set_int(KEY_CONTROL_LAST_SEQ, current)
-                    log_error(self.proc_name, "MPRIS control command failed", f"{name}: {detail}")
+                    log_error(self.proc_name, "MPRIS control command failed", f"{name}: {detail}", transient=True)
                     break
 
     def run(self) -> None:

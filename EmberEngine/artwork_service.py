@@ -46,7 +46,7 @@ from typing import Any, Dict, Optional, Tuple
 import synapse as bus
 from artwork_cache import MAX_SLUG_CHARS, SLUG_PATTERN, VERSION_PATTERN, ArtworkCache
 from runtime_config import ConfigError, load_yaml_mapping, validate_artwork_service
-from whisper_daemon import log_error, log_heartbeat, log_info
+from whisper_daemon import log_error, log_heartbeat, log_info, log_recovery
 
 DEFAULTS: Dict[str, Any] = {
     "proc_name": "artwork_service",
@@ -215,6 +215,7 @@ def main() -> None:
     cache = cache_from_cfg(cfg)
     next_attempt = 0.0
     retry_s = 5.0
+    bind_failed = False  # reported to Whisper and not yet recovered
     try:
         while not stopping.is_set():
             now = time.monotonic()
@@ -226,8 +227,12 @@ def main() -> None:
                     bus.set_int(KEY_READY, 1)
                     retry_s = 5.0
                     log_info(proc_name, "artwork_service_listening")
+                    if bind_failed:
+                        bind_failed = False
+                        log_recovery(proc_name, "artwork_service_bind_recovered", recovers_key=f"{proc_name}:bind")
                 except OSError as exc:
                     server = None
+                    bind_failed = True
                     log_error(proc_name, "Artwork service could not listen",
                               f"127.0.0.1:{int(cfg['port'])} unavailable ({type(exc).__name__}); retrying",
                               event="artwork_service_bind_failed", dedupe_key=f"{proc_name}:bind")

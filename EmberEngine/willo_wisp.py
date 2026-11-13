@@ -261,7 +261,7 @@ def main():
                 strip.off()
                 strip.close()
         except Exception as e:
-            log_error(proc_name, "Error during led strip shutdown", str(e))
+            log_error(proc_name, "Error during led strip shutdown", str(e), transient=True)
         try:
             bus.close_all()
         except Exception:

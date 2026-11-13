@@ -284,10 +284,21 @@ def log_error(
     event: str | None = None,
     dedupe_key: str | None = None,
     metadata: dict[str, Any] | None = None,
+    transient: bool = False,
 ) -> None:
-    """Handle the log error lifecycle step."""
+    """Report an error to Whisper.
+
+    By default the error is an open fault, and Whisper's mood stays
+    "wounded", until a ``log_recovery`` names its dedupe key. Pass
+    ``transient=True`` for a single failed action that has no recovery
+    (a rejected command, a launch that did not start): it then counts only
+    until ``error_dedupe_cooldown_s`` passes without it happening again.
+    Never use it for a condition that is reported once and then persists.
+    """
     stable_event = event or _error_event(summary)
     md = {"summary": summary, "details": details, **(metadata or {})}
+    if transient:
+        md["transient"] = True
     publish(SpiritMessage(
         priority=PRIORITY_CRITICAL,
         kind="error",
@@ -532,6 +543,7 @@ class WhisperScheduler:
                 "last_seen_at": now,
                 "last_printed_at": now,
                 "suppressed": fault["suppressed"] if fault else 0,
+                "transient": bool(message.metadata.get("transient")),
             }
 
         recovers_key = message.metadata.get("recovers_key")
@@ -593,6 +605,14 @@ class WhisperScheduler:
             if fault["suppressed"] and now - float(fault["last_seen_at"]) >= cooldown:
                 self.ready[PRIORITY_LIFECYCLE].append(self._duplicate_summary(key, fault, now))
                 fault["suppressed"] = 0
+            if not self._fault_is_open(fault, now):
+                del self.faults[key]  # a transient error that has stopped happening
+
+    def _fault_is_open(self, fault: dict[str, Any], now: float) -> bool:
+        """Whether a fault still counts: until recovered, or for a transient one, until it goes quiet."""
+        if not fault.get("transient"):
+            return True
+        return now - float(fault["last_seen_at"]) < float(self.cfg["error_dedupe_cooldown_s"])
 
     def _fair_pop(self, priority: int) -> SpiritMessage:
         """Return the fair pop result."""
@@ -632,7 +652,7 @@ class WhisperScheduler:
         now = time.monotonic() if now is None else now
         while self.recent_events and self.recent_events[0] < now - 15.0:
             self.recent_events.popleft()
-        if self.faults:
+        if any(self._fault_is_open(fault, now) for fault in self.faults.values()):
             return "wounded"
         if now < self.recovering_until:
             return "recovering"

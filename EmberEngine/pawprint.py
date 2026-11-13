@@ -768,7 +768,7 @@ class ControlStateStore:
                 values[name] = self.clamp_control(name, controls.get(name), values[name])
             return values
         except Exception as exc:
-            log_error("pawprint", "control state load failed", repr(exc))
+            log_error("pawprint", "control state load failed", repr(exc), transient=True)
             return values
 
     def mark_dirty(self) -> None:
@@ -802,7 +802,7 @@ class ControlStateStore:
             self.dirty = False
             self.last_save_at = time.monotonic() if now is None else now
         except Exception as exc:
-            log_error("pawprint", "control state save failed", repr(exc))
+            log_error("pawprint", "control state save failed", repr(exc), transient=True)
 
 
 class EventRing:
@@ -997,7 +997,7 @@ class PawprintHardware:
             self.matrix.show()
             self.last_matrix_frame = frame
         except Exception as exc:
-            log_error(str(self.cfg["proc_name"]), "I2C indicator write failed", repr(exc))
+            log_error(str(self.cfg["proc_name"]), "I2C indicator write failed", repr(exc), transient=True)
             self.disconnect()
 
 
@@ -1161,7 +1161,7 @@ class Pawprint:
             status_note(self.proc_name, "virtual media keys ready")
         except Exception as exc:
             bus.set_int("/io/health/media_keys_ok", 0)
-            log_error(self.proc_name, "virtual media key setup failed", repr(exc))
+            log_error(self.proc_name, "virtual media key setup failed", repr(exc), transient=True)
 
     def _send_media_key(self, name: str) -> None:
         """Send media key."""
@@ -1175,14 +1175,14 @@ class Pawprint:
         if code is None:
             return
         if not self.media_keys.online:
-            log_error(self.proc_name, "media key ignored: virtual device offline", name)
+            log_error(self.proc_name, "media key ignored: virtual device offline", name, transient=True)
             return
         try:
             self.media_keys.press(code)
             status_note(self.proc_name, f"media key sent: {name}")
         except Exception as exc:
             bus.set_int("/io/health/media_keys_ok", 0)
-            log_error(self.proc_name, "virtual media key write failed", repr(exc))
+            log_error(self.proc_name, "virtual media key write failed", repr(exc), transient=True)
 
     def _request_shutdown(self) -> None:
         """Handle the request shutdown lifecycle step."""
@@ -1200,7 +1200,7 @@ class Pawprint:
             )
             status_note(self.proc_name, "orderly shutdown requested")
         except Exception as exc:
-            log_error(self.proc_name, "orderly shutdown request failed", repr(exc))
+            log_error(self.proc_name, "orderly shutdown request failed", repr(exc), transient=True)
 
     def _plex_is_available(self, now: float) -> bool:
         """Plex is available when Minstrel is alive *and* reports a live connection.
@@ -1408,7 +1408,7 @@ class Pawprint:
             try:
                 self._publish_bluetooth_metadata(future.result())
             except Exception as exc:
-                log_error(self.proc_name, "Bluetooth media refresh failed", repr(exc))
+                log_error(self.proc_name, "Bluetooth media refresh failed", repr(exc), transient=True)
 
         remaining: List[Tuple[str, Future]] = []
         for name, command_future in self.bluetooth_command_futures:
@@ -1424,7 +1424,7 @@ class Pawprint:
                 status_note(self.proc_name, f"Bluetooth media command completed: {name}")
             else:
                 bus.set_int("/io/health/media_command_last_status", -1)
-                log_error(self.proc_name, "Bluetooth media command failed", f"{name}: {detail}")
+                log_error(self.proc_name, "Bluetooth media command failed", f"{name}: {detail}", transient=True)
         self.bluetooth_command_futures = remaining
 
     def _route_transport_command(self, name: str, now: float) -> None:
@@ -1436,14 +1436,14 @@ class Pawprint:
                 status_note(self.proc_name, f"media command routed to Plex: {name}")
             else:
                 self._record_media_dispatch(name, target, -1)
-                log_error(self.proc_name, "Plex media command rejected", name)
+                log_error(self.proc_name, "Plex media command rejected", name, transient=True)
             return
 
         if target == MEDIA_TARGET_BLUETOOTH:
             action, player_path = self._bluetooth_action(name)
             if not action or not player_path:
                 self._record_media_dispatch(name, target, -1)
-                log_error(self.proc_name, "Bluetooth media command failed", f"{name}: target unavailable")
+                log_error(self.proc_name, "Bluetooth media command failed", f"{name}: target unavailable", transient=True)
                 return
             future = self.media_executor.submit(self.bluetooth_media.send, action, player_path)
             self.bluetooth_command_futures.append((name, future))
@@ -1457,7 +1457,7 @@ class Pawprint:
                 status_note(self.proc_name, f"media command routed to MPRIS: {name}")
             else:
                 self._record_media_dispatch(name, target, -1)
-                log_error(self.proc_name, "MPRIS media command rejected", name)
+                log_error(self.proc_name, "MPRIS media command rejected", name, transient=True)
             return
 
         self._send_media_key(name)

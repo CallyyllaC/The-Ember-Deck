@@ -437,5 +437,72 @@ class ArtworkHttpTests(unittest.TestCase):
             self.assertNotIn("create_connection", source)
 
 
+class ArtworkServiceRecoveryTests(unittest.TestCase):
+    """A port that frees up is reported as recovered, not left as an open fault (E-8)."""
+
+    def test_bind_failure_is_recovered_when_the_service_listens(self):
+        import artwork_service as svc
+        from _support import FakeBus, capture_whisper
+
+        attempts = []
+
+        class Server:
+            def __init__(self, cache, port):
+                attempts.append(port)
+                if len(attempts) == 1:
+                    raise OSError(98, "Address already in use")
+
+            def serve_forever(self):
+                pass
+
+            def shutdown(self):
+                pass
+
+            def server_close(self):
+                pass
+
+        class Event:
+            waits = 0
+
+            def set(self):
+                pass
+
+            def is_set(self):
+                return Event.waits >= 3
+
+            def wait(self, timeout=None):
+                Event.waits += 1
+
+        class Thread:
+            def __init__(self, target=None, name=None, daemon=None):
+                pass
+
+            def start(self):
+                pass
+
+        clock = [0.0]
+
+        def monotonic():
+            clock[0] += 10.0  # past the 5 s retry on every pass
+            return clock[0]
+
+        fake_threading = mock.Mock(Event=Event, Thread=Thread)
+        with mock.patch.object(svc, "load_cfg", lambda: dict(svc.DEFAULTS, enabled=True)), \
+                mock.patch.object(svc, "cache_from_cfg", lambda cfg: object()), \
+                mock.patch.object(svc, "ArtworkServer", Server), \
+                mock.patch.object(svc, "threading", fake_threading), \
+                mock.patch.object(svc, "bus", FakeBus()), \
+                mock.patch.object(svc.signal, "signal"), \
+                mock.patch.object(svc.time, "monotonic", monotonic), \
+                capture_whisper() as messages:
+            svc.main()
+        self.assertEqual(len(attempts), 2)
+        errors = [m for m in messages if m.kind == "error"]
+        recoveries = [m for m in messages if m.kind == "recovery"]
+        self.assertEqual([m.dedupe_key for m in errors], ["artwork_service:bind"])
+        self.assertEqual([(m.event, m.metadata["recovers_key"]) for m in recoveries],
+                         [("artwork_service_bind_recovered", "artwork_service:bind")])
+
+
 if __name__ == "__main__":
     unittest.main()
