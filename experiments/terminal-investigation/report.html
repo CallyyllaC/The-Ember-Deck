@@ -1,0 +1,353 @@
+<title>Ember Deck Terminal Study</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&display=swap">
+<style>
+/* Layout: one reading column (~72ch) with wide figure grids and scrollable tables; status shown as pills. */
+:root {
+  --bg: #f3f0ee;
+  --surface: #fbfaf9;
+  --ink: #241a17;
+  --muted: #6b5d57;
+  --rule: #ddd4cf;
+  --ember: #b7471a;
+  --ember-soft: #f3dfd4;
+  --good: #2c6e47;   --good-bg: #dcefe3;
+  --warn: #8a5a0b;   --warn-bg: #f6e8cc;
+  --bad: #9e2f2f;    --bad-bg: #f5dada;
+  --code-bg: #ece6e2;
+  --display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #150d0c; --surface: #1e1412; --ink: #eee2d8; --muted: #a8968c; --rule: #3a2a26;
+    --ember: #f0874b; --ember-soft: #3a1f15;
+    --good: #7fd19e; --good-bg: #173325; --warn: #e8b55c; --warn-bg: #3a2c12; --bad: #f08c8c; --bad-bg: #3d1a1a;
+    --code-bg: #2a1d1a; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #150d0c; --surface: #1e1412; --ink: #eee2d8; --muted: #a8968c; --rule: #3a2a26;
+  --ember: #f0874b; --ember-soft: #3a1f15;
+  --good: #7fd19e; --good-bg: #173325; --warn: #e8b55c; --warn-bg: #3a2c12; --bad: #f08c8c; --bad-bg: #3d1a1a;
+  --code-bg: #2a1d1a; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font: 16px/1.6 var(--body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 80px;
+}
+main { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 56px; }
+section { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.prose { max-width: 72ch; }
+h1, h2, h3 { font-family: var(--display); line-height: 1.15; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(2rem, 5vw, 3rem); font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 1.65rem; font-weight: 600; }
+h3 { font-size: 1.15rem; font-weight: 600; margin-top: 8px; }
+p, ul, ol { margin: 0; }
+ul, ol { padding-left: 1.3em; display: flex; flex-direction: column; gap: 6px; }
+.eyebrow { font: 600 0.75rem/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ember); }
+.lede { font-size: 1.12rem; color: var(--muted); max-width: 68ch; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--code-bg); padding: 0.08em 0.35em; border-radius: 4px; }
+a { color: var(--ember); }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 20px; font: 0.82rem var(--mono); color: var(--muted); }
+.decision {
+  background: var(--surface); border: 1px solid var(--rule); border-left: 4px solid var(--ember);
+  border-radius: 8px; padding: 20px 22px; display: flex; flex-direction: column; gap: 12px;
+}
+.decision h2 { font-size: 1.3rem; }
+.pill { display: inline-block; font: 600 0.72rem/1.5 var(--mono); padding: 0 8px; border-radius: 999px; white-space: nowrap; }
+.yes { color: var(--good); background: var(--good-bg); }
+.part { color: var(--warn); background: var(--warn-bg); }
+.no { color: var(--bad); background: var(--bad-bg); }
+.table-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
+th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--rule); }
+th { font: 600 0.78rem/1.3 var(--display); letter-spacing: 0.03em; text-transform: uppercase; color: var(--muted); background: var(--surface); position: sticky; top: 0; }
+tr:last-child td { border-bottom: 0; }
+td:first-child { font-weight: 600; white-space: nowrap; }
+td .pill { margin-bottom: 4px; }
+.matrix td { min-width: 150px; }
+.matrix td:first-child { min-width: 120px; }
+.figs { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+figure { margin: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+figure img { width: 100%; height: auto; aspect-ratio: 4 / 3; image-rendering: pixelated; border-radius: 6px; border: 1px solid var(--rule); background: #090304; }
+figcaption { font-size: 0.86rem; color: var(--muted); }
+figcaption b { color: var(--ink); font-weight: 600; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.card h3 { margin: 0; }
+.tag { font: 600 0.72rem/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.num { font-variant-numeric: tabular-nums; }
+.checklist li { padding-left: 2px; }
+.spec { border-top: 2px dashed var(--rule); padding-top: 32px; }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+</style>
+
+<main>
+<header class="prose" style="display:flex;flex-direction:column;gap:14px">
+  <span class="eyebrow">Investigation · panel UI · 640 × 480</span>
+  <h1>Ember Deck terminal study</h1>
+  <p class="lede">Which terminal should the panel UI run in, can it show different text sizes inside the existing Textual app, and what could the Scope page become? Everything here was checked against the code, upstream sources and real Textual output; what only the Pi can prove is marked as such.</p>
+  <div class="meta"><span>13 Nov 2026</span><span>branch feature/ui-layout-rework @ 4fd09ff</span><span>Textual 8.2.7 · Rich 15.0.0</span><span>proofs of concept: experiments/terminal-investigation/</span></div>
+</header>
+
+<div class="decision">
+  <span class="eyebrow">Recommendation</span>
+  <h2>Move the panel to kitty, keep Textual, and add two small custom pieces, after a one-evening Pi validation.</h2>
+  <ul>
+    <li><b>kitty</b> is the only candidate that both draws larger text (its OSC 66 text-sizing protocol) and shows pixel graphics in a way Textual can live with (Unicode image placeholders). It is packaged in Debian Trixie (0.41.1, arm64) and, per its source, needs only OpenGL 3.1 on Linux, which the Pi 5 driver exposes.</li>
+    <li><b>Mixed font sizes work in Textual only through a driver filter</b>: widgets draw placeholder characters and a ~60-line subclass of Textual's Linux driver turns them into kitty large-text sequences. Against Textual's real output and a model of kitty's rules it survived every redraw case tried (0 errors); the obvious approach failed (52 misplaced cells).</li>
+    <li><b>The Scope page can become a pixel visualiser</b> from data Echo already publishes, with Textual's text untouched while it animates.</li>
+    <li><b>Do one thing now, in any terminal</b>: the eighth-block spectrum (section 5) is a large improvement over today's scope and works in LXTerminal.</li>
+    <li><b>If kitty fails on the Pi</b>, stay on LXTerminal (option A) and keep the dot-matrix lyrics. A native graphics UI is not justified by anything found here.</li>
+  </ul>
+</div>
+
+<section>
+  <span class="eyebrow">1</span>
+  <h2>Current environment</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Item</th><th>What is known</th><th>How</th></tr></thead>
+    <tbody>
+      <tr><td>Hardware, OS</td><td>Raspberry Pi 5, 64-bit Raspberry Pi OS, Labwc (Wayland), Python 3.13</td><td><span class="pill yes">repo</span> INSTALLATION.md</td></tr>
+      <tr><td>OS release</td><td>Debian 13 "Trixie" base (Python 3.13 is Trixie's default), so LXTerminal 0.4.1 on VTE 0.80, Mesa 25.0 with OpenGL 3.1 on V3D</td><td><span class="pill part">inferred</span> confirm with <code>/etc/os-release</code></td></tr>
+      <tr><td>Panel display</td><td>5.6-inch secondary display, 640 × 480; the 4.3-inch touchscreen runs the Firefox Plexamp kiosk on HDMI-2</td><td><span class="pill yes">repo + you</span></td></tr>
+      <tr><td>Launch</td><td><code>ember-ui.service</code> → <code>lxterminal --no-remote --profile=emberdeck --title="EMBER DECK"</code> → <code>ember_ui.py</code></td><td><span class="pill yes">repo</span></td></tr>
+      <tr><td>Grid and font</td><td>About 80 × 30 cells (8 × 16 px) judged from the demo videos; the profile's font is not in the repo</td><td><span class="pill part">inferred</span> <code>pi_probe.py</code> measures it</td></tr>
+      <tr><td>Window placement</td><td>Labwc rules exist for HDMI-2 guests; the rule that puts the panel window on its output is not in the repo (review item E-13)</td><td><span class="pill no">unknown</span></td></tr>
+      <tr><td>UI framework</td><td>Textual 8.2.7, Rich 15.0.0; four pages (Now Playing, Scope, Track Info, Console) built as absolutely placed <code>Static</code> widgets from <code>compute_layout()</code></td><td><span class="pill yes">repo</span></td></tr>
+      <tr><td>Input</td><td>Pages follow the physical selectors (source selector position 1 plus the four-way selector). The only key binding is <code>q</code>; the panel has no touch or mouse input</td><td><span class="pill yes">repo</span></td></tr>
+      <tr><td>Refresh</td><td>50 Hz scheduler; only the visible page renders. Scope redraws its text at up to 50 Hz, Now Playing and Console at 2 Hz</td><td><span class="pill yes">repo</span></td></tr>
+      <tr><td>Audio data</td><td>Echo captures PipeWire's default input at 48 kHz, mixes to mono, and every 20 ms publishes 1025 rFFT magnitudes of a Hann-windowed 2048-sample window (<code>/audio/spectrum</code>) and 160 decimated samples of the same window (<code>/audio/waveform</code>). Foxfire uses the spectrum; the Scope page uses only the waveform</td><td><span class="pill yes">repo</span></td></tr>
+      <tr><td>Capture source</td><td>Whether Echo hears every player (a sink monitor) or a hardware input is not recorded</td><td><span class="pill no">unknown</span> <code>pactl get-default-source</code></td></tr>
+      <tr><td>Artwork</td><td>Minstrel publishes a 48 × 48 RGB mosaic; the UI draws it with half blocks. Minstrel already downloads full Plex covers, and the optional artwork cache stores them as 512 × 512 PNGs</td><td><span class="pill yes">repo</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <span class="eyebrow">2</span>
+  <h2>Terminal comparison</h2>
+  <p class="prose">"Textual-safe graphics" means images that survive Textual redrawing the cells around them. Versions are what Debian Trixie ships unless stated.</p>
+  <div class="table-wrap"><table class="matrix">
+    <thead><tr><th>Terminal</th><th>Larger text</th><th>Pixel graphics</th><th>Textual-safe graphics</th><th>Runs on the Pi 5</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>LXTerminal 0.4.1 (VTE 0.80)</td><td><span class="pill no">no</span></td><td><span class="pill no">no</span><br>VTE has Sixel behind a switch that defaults off; LXTerminal's source never turns it on</td><td><span class="pill no">no</span></td><td><span class="pill yes">today</span></td><td>Block elements and Braille draw crisply. Baseline.</td></tr>
+      <tr><td>kitty 0.41.1</td><td><span class="pill yes">yes</span><br>OSC 66 scale 1–7 and fractions (since 0.40)</td><td><span class="pill yes">yes</span><br>kitty graphics protocol; shared-memory transfer</td><td><span class="pill yes">yes</span><br>Unicode placeholders (since 0.28)</td><td><span class="pill part">likely</span><br>needs OpenGL 3.1 on Linux (source); V3D exposes 3.1, not conformant</td><td>GPU rendering, Wayland, full screen and no decorations by option. Only full candidate.</td></tr>
+      <tr><td>foot 1.21.0</td><td><span class="pill part">width only</span><br>OSC 66 <code>w</code> since 1.21, no scaling</td><td><span class="pill yes">Sixel</span></td><td><span class="pill no">no</span><br>Sixel is erased by text redraws</td><td><span class="pill yes">yes</span><br>Wayland-native, CPU renderer</td><td>Fast and light; cannot enlarge text.</td></tr>
+      <tr><td>WezTerm (upstream 2024-02)</td><td><span class="pill no">no</span></td><td><span class="pill part">partial</span><br>Sixel, iTerm2, partial kitty</td><td><span class="pill no">no</span><br>no placeholders</td><td><span class="pill part">unknown</span><br>not in Debian; last stable Feb 2024</td><td>Maintenance risk.</td></tr>
+      <tr><td>Ghostty</td><td><span class="pill no">no</span><br>parses OSC 66, does not render</td><td><span class="pill yes">kitty</span></td><td><span class="pill yes">placeholders</span></td><td><span class="pill no">no</span><br>needs OpenGL 4.3</td><td>Excluded by the GPU.</td></tr>
+      <tr><td>Alacritty 0.15.1</td><td><span class="pill no">no</span></td><td><span class="pill no">no</span></td><td><span class="pill no">no</span></td><td><span class="pill yes">yes</span></td><td>Nothing visual over LXTerminal.</td></tr>
+      <tr><td>Konsole 25.04</td><td><span class="pill no">no</span></td><td><span class="pill yes">Sixel</span></td><td><span class="pill no">no</span><br>kitty support not usable (textual-image)</td><td><span class="pill yes">yes</span></td><td>Pulls in the KDE stack.</td></tr>
+      <tr><td>xterm 398</td><td><span class="pill part">lines only</span><br>DECDHL doubles whole lines; Textual cannot use it</td><td><span class="pill yes">Sixel</span> (VT340 mode)</td><td><span class="pill no">no</span></td><td><span class="pill yes">via XWayland</span></td><td>Legacy; X11.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <span class="eyebrow">3</span>
+  <h2>Mixed font sizes: feasible in kitty, through a driver filter</h2>
+  <div class="prose" style="display:flex;flex-direction:column;gap:12px">
+    <p>kitty's protocol draws text at <code>s</code> times normal size as a block <code>s</code> cells tall. Two rules from its spec decide how Textual can use it: overwriting a cell on the block's top row erases the block, and printing on a lower row makes the cursor <em>skip past</em> the block first. Textual redraws a changed widget by moving the cursor to the start of each row and writing the full width (captured from Textual 8.2.7), so printing spaces under large text pushes the rest of that row sideways.</p>
+    <p>Textual also cannot carry the escape itself: in the captured output Rich strips the BEL that ends the sequence, and Textual counts the escape's bytes as visible cells. The working design keeps the escape out of Textual altogether:</p>
+    <ol>
+      <li>A widget draws private-use placeholder characters, one per cell the large text will cover: an anchor at the top-left, then skip markers.</li>
+      <li>A subclass of Textual's <code>LinuxDriver</code> rewrites the output: the anchor becomes the OSC 66 sequence, top-row skips vanish (kitty's cursor already moved), lower-row skips become cursor-forward moves.</li>
+    </ol>
+    <p>Replaying Textual's real output for a first frame, longer and shorter large lines, a neighbour updating on the block's lower row, an unrelated update, a full repaint, and hiding and showing the widget into a model of kitty's rules gave <b>0 mismatches</b>. Printing spaces under the block gave <b>52</b>. The model follows the spec, not kitty itself; <code>kitty_textsize_demo.py</code> is the real test.</p>
+    <p>Limits: whole-cell scales (1–7, plus fractions such as 1.5 rendered inside a 2 × 2 block); the app wraps lines itself; nothing may be drawn on top of a large block; support has to be detected before Textual starts (kitty's CPR method, in <code>pi_probe.py</code>), with normal text as the fallback.</p>
+  </div>
+</section>
+
+<section>
+  <span class="eyebrow">4</span>
+  <h2>Textual compatibility</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Technique</th><th>Status</th><th>Evidence and conditions</th></tr></thead>
+    <tbody>
+      <tr><td>True colour, bold, italic, block and Braille characters</td><td><span class="pill yes">native</span></td><td>Plain text to Textual. Colour mode is auto-detected from <code>COLORTERM</code>, which kitty sets.</td></tr>
+      <tr><td>Eighth-block and Braille visualisers</td><td><span class="pill yes">native</span></td><td>Ordinary styled text; rendered through the real Scope page below.</td></tr>
+      <tr><td>kitty images via Unicode placeholders</td><td><span class="pill yes">custom widget</span></td><td>Each placeholder (U+10EEEE plus two combining marks) measures one cell in Rich (checked up to 100 × 100). Textual passed the 24-bit image-id colour through exactly (with <code>TEXTUAL_COLOR_SYSTEM=truecolor</code>). Pixel frames go out through <code>driver.write()</code>, in order with Textual's frames. The same method <code>textual-image</code> uses.</td></tr>
+      <tr><td>Per-frame image updates</td><td><span class="pill part">Pi test</span></td><td>Editing the image's root frame in place (<code>a=f,r=1</code>) avoids recreating the placement; the spec does not say whether placeholder placements show the edit. The demo also offers re-send plus re-place.</td></tr>
+      <tr><td>Large text (OSC 66)</td><td><span class="pill part">custom driver</span></td><td>Works through the placeholder filter only (section 3). Real-kitty behaviour still to confirm.</td></tr>
+      <tr><td>Escape sequences inside widget text</td><td><span class="pill no">incompatible</span></td><td>BEL stripped, width miscounted (captured).</td></tr>
+      <tr><td>Sixel inside Textual</td><td><span class="pill no">impractical</span></td><td>Any text redraw over the area erases it; the image must be re-sent on every redraw. textual-image warns of flicker and calls its Sixel path "not particularly performant".</td></tr>
+      <tr><td>DECDHL double-size lines</td><td><span class="pill no">incompatible</span></td><td>Applies to whole terminal lines and halves the line's width; Textual's layout does not know about it. Not available in VTE or kitty anyway.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <span class="eyebrow">5</span>
+  <h2>Visualiser opportunities</h2>
+  <p class="prose">Every image is the real Scope page at 640 × 480 (Textual layout from the current branch) with the panel's contents drawn from real audio: the "Tech Demo" video's soundtrack, a camera recording of the Deck playing, put through Echo's exact processing. It reads quieter than Echo's line-level input would. The kitty images are composited where kitty would draw them.</p>
+  <div class="figs">
+    <figure><img src="img/v0_current_scope.png" alt="Today's half-block oscilloscope on the Scope page"><figcaption><b>Today.</b> Half-block scope from the 160-sample waveform.</figcaption></figure>
+    <figure><img src="img/v1_text_bars.png" alt="Eighth-block spectrum bars on the Scope page"><figcaption><b>Any terminal: eighth-block spectrum.</b> 74 log-spaced bands, 120 levels. Works in LXTerminal today.</figcaption></figure>
+    <figure><img src="img/v2_text_braille.png" alt="Braille-resolution oscilloscope trace"><figcaption><b>Any terminal: Braille oscilloscope.</b> 148 × 60 dots.</figcaption></figure>
+    <figure><img src="img/v3_px_bars.png" alt="Pixel spectrum bars with peak-hold caps"><figcaption><b>kitty: bars with peak hold.</b> 592 × 240 px, VU-style ballistics.</figcaption></figure>
+    <figure><img src="img/v4_px_scope.png" alt="Glowing phosphor oscilloscope trace"><figcaption><b>kitty: phosphor scope.</b> Anti-aliased trace, glow and persistence.</figcaption></figure>
+    <figure><img src="img/v5_px_spectrogram.png" alt="Scrolling spectrogram, half filled"><figcaption><b>kitty: spectrogram.</b> About 12 s of history; half filled by a 6 s clip.</figcaption></figure>
+    <figure><img src="img/v6_px_radial_full.png" alt="Radial spectrum around a round cover across the page"><figcaption><b>kitty: radial "art mode".</b> Visualiser takes the page body; the cover is today's 48 × 48 mosaic.</figcaption></figure>
+  </div>
+  <div class="two">
+    <div class="card">
+      <span class="tag">Data available now</span>
+      <ul>
+        <li>Spectrum: 1025 bins, 23.4 Hz apart, 50 per second. Enough for bars, peak hold, spectrograms and radial forms. Bass detail is coarse: below 100 Hz there are four bins.</li>
+        <li>Waveform: 160 samples covering 42.7 ms, mono, no trigger, so traces wander frame to frame.</li>
+        <li>The UI only reads shared memory: no new capture and no effect on playback or on Foxfire.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <span class="tag">Would need Echo changes</span>
+      <ul>
+        <li>Stereo or left/right displays: Echo mixes to mono before publishing; it would publish per-channel data.</li>
+        <li>A steady oscilloscope: publish the raw 2048-sample window, or trigger on a zero crossing in Echo.</li>
+        <li>Finer bass: a larger FFT, at the cost of latency.</li>
+        <li>Every source: depends on what Echo captures (Pi check 1).</li>
+      </ul>
+    </div>
+  </div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Renderer</th><th>Kind</th><th class="num">ms per frame (this PC)</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>Eighth-block bars</td><td>text</td><td class="num">4.2</td><td>Plus Textual's own redraw of 15 rows.</td></tr>
+      <tr><td>Braille oscilloscope</td><td>text</td><td class="num">1.4</td><td></td></tr>
+      <tr><td>Bars with peak hold</td><td>pixels</td><td class="num">1.8</td><td></td></tr>
+      <tr><td>Spectrogram</td><td>pixels</td><td class="num">0.1</td><td>Colours one new column per frame.</td></tr>
+      <tr><td>Radial</td><td>pixels</td><td class="num">8.0</td><td></td></tr>
+      <tr><td>Phosphor oscilloscope</td><td>pixels</td><td class="num">10.7</td><td>Blur-based glow; the first to simplify if the Pi is slow.</td></tr>
+    </tbody>
+  </table></div>
+  <p class="prose">Pi 5 figures are not measured yet; expect several times slower. One compressed 592 × 240 frame was about 10 KB through the terminal stream in the headless run; shared memory avoids the stream entirely. With pixel graphics Textual's text no longer changes 50 times a second, which removes the Scope page's largest Textual cost. Latency from audio to screen is estimated at 60–100 ms (analysis window, publish interval, frame interval); not measured.</p>
+</section>
+
+<section>
+  <span class="eyebrow">6</span>
+  <h2>Architecture options</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Option</th><th>What it enables</th><th>Still impossible</th><th>Custom work</th><th>Cost and risk</th></tr></thead>
+    <tbody>
+      <tr><td>A · LXTerminal + Textual</td><td>Better layout; eighth-block and Braille visualisers; dot-matrix lyrics</td><td>Real larger text; pixel art and visualisers</td><td>None new</td><td><span class="pill yes">low</span> No deployment change.</td></tr>
+      <tr><td>B · kitty + Textual, no custom rendering</td><td>Crisper GPU text, finer font control, borderless full screen</td><td>Larger text and graphics stay unused</td><td>Launcher and kitty config</td><td><span class="pill part">low</span> Little visible gain over A.</td></tr>
+      <tr><td>C · kitty + Textual + custom rendering</td><td>2× and 1.5× title and lyrics in a real font; pixel visualisers; sharp cover art</td><td>Arbitrary type sizes (whole-cell scales only); drawing over large text</td><td>Driver filter (~60 lines); placeholder image widget (~150); feature detection and fallback; larger cover from Minstrel</td><td><span class="pill part">medium</span> Depends on kitty on V3D; one new system package.</td></tr>
+      <tr><td>D · Native graphics UI (pygame/SDL or a browser page)</td><td>Any font, size, animation</td><td>Nothing visual</td><td>Rewrite of about 1,900 lines of UI and its layout engine</td><td><span class="pill no">high</span> Weeks of work; loses the terminal character and Textual's layout. Only if C fails and A is not enough.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <span class="eyebrow">7</span>
+  <h2>Recommended terminal and rendering strategy</h2>
+  <ol class="prose">
+    <li><b>Terminal: kitty</b>, subject to the Pi checklist. It is the only candidate with both capabilities, packaged for the Deck's OS, and its OpenGL requirement matches what the Pi 5 driver exposes (checked in kitty's source, which overrides older reports quoting 3.3).</li>
+    <li><b>Keep Textual and <code>compute_layout()</code>.</b> Add the placeholder driver filter for large text and a placeholder image widget for the visualiser and cover.</li>
+    <li><b>Detect, then fall back.</b> At start, probe for OSC 66 scaling and kitty graphics. Without them, the same UI runs as today: normal text and the eighth-block visualiser. LXTerminal stays a working fallback.</li>
+    <li><b>Fonts and grid: decide after the probe.</b> The likely shape is a small base font (about 8 × 16 px, 80 × 30) for dense logs and track details, with 2× text where reading distance matters. <code>pi_probe.py</code> reports the real cell size for each font size.</li>
+  </ol>
+</section>
+
+<section>
+  <span class="eyebrow">8</span>
+  <h2>What this means for the UI</h2>
+  <div class="figs">
+    <figure><img src="img/t0_now.png" alt="Now Playing today with dot-matrix lyrics"><figcaption><b>Now Playing today</b> (branch, LXTerminal). Small title, empty space, dot-matrix capitals for the lyric.</figcaption></figure>
+    <figure><img src="img/t2_now_kitty.png" alt="Now Playing design mock with large title and lyric"><figcaption><b>Design mock, kitty (simulated).</b> Title 2×, artist 1.5×, current lyric 2× (36 characters a row), cover as pixels. Font sizes simulated; not a terminal capture.</figcaption></figure>
+  </div>
+  <div class="two">
+    <div class="card"><span class="tag">Now Playing</span><ul>
+      <li>Title at 2× (two lines), artist at 1.5×, album and progress at 1×.</li>
+      <li>Current lyric at 2× in a real font; neighbours at 1×.</li>
+      <li>Cover as pixels at about 224 px. Needs Minstrel to publish a larger cover (it already fetches one); today's 48 × 48 only scales smoothly.</li>
+      <li>Header keeps track context and format, no repeats.</li>
+    </ul></div>
+    <div class="card"><span class="tag">Scope</span><ul>
+      <li>Give the visualiser the whole body; keep one compact track line and the lyric band.</li>
+      <li>Start with peak-hold bars or the spectrogram; both are cheap.</li>
+      <li>Radial "art mode" is a candidate second style.</li>
+    </ul></div>
+    <div class="card"><span class="tag">Console</span><ul>
+      <li>Keep the full-width log, the newest-line fix and the seven-worker heartbeat strip.</li>
+      <li>Readability comes from kitty's crisper rendering and the font choice, not large text: logs need columns.</li>
+      <li>Optionally the heartbeat strip at 1.5×.</li>
+    </ul></div>
+    <div class="card"><span class="tag">Track Info</span><ul>
+      <li>Title at 2× across the top; two columns of known fields below (unknown fields are already hidden).</li>
+    </ul></div>
+  </div>
+  <div class="two">
+    <div class="card"><span class="tag">Dot-matrix lyrics</span>
+      <p>Superseded if kitty passes: real 2× text keeps lowercase and fits more per line (36 against 25 characters). Keep it until the migration is confirmed, then remove it. If the Deck stays on LXTerminal, it remains the best available large text.</p>
+    </div>
+    <div class="card"><span class="tag">compute_layout()</span>
+      <p>Keep it as the one place geometry lives, but design for the Deck's single grid once the font is chosen. Keep only a minimal fallback for desktop testing, and pin the tests to the Deck's grid instead of sweeping 40 × 18 to 100 × 60.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <span class="eyebrow">9</span>
+  <h2>Proof-of-concept results</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Claim</th><th>Status</th><th>How</th></tr></thead>
+    <tbody>
+      <tr><td>Raw escapes in widget text break</td><td><span class="pill yes">shown</span></td><td>Captured Textual output: BEL removed, padding wrong.</td></tr>
+      <tr><td>Placeholder characters pass through Textual unchanged</td><td><span class="pill yes">shown</span></td><td>Captured output; Rich widths checked.</td></tr>
+      <tr><td>OSC 66 filter keeps the screen correct across redraws</td><td><span class="pill yes">shown in model</span></td><td><code>verify_textsize_model.py</code>: 0 vs 52 mismatches.</td></tr>
+      <tr><td>Graphics demo builds correct kitty commands, ids and placeholders</td><td><span class="pill yes">shown headless</span></td><td>30 frames from real audio; one placement, then in-place edits; payload chunks ≤ 4096 bytes.</td></tr>
+      <tr><td>kitty starts on the Pi 5 and renders both</td><td><span class="pill part">theoretical</span></td><td>Source and package checks only.</td></tr>
+      <tr><td>Placeholder images update from in-place edits</td><td><span class="pill part">theoretical</span></td><td>Not stated in the spec.</td></tr>
+      <tr><td>Frame rate and CPU on the Pi</td><td><span class="pill part">theoretical</span></td><td>PC timings only.</td></tr>
+      <tr><td>Kitty mock appearance</td><td><span class="pill part">simulated</span></td><td>Drawn with a desktop font at kitty's cell sizes.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <span class="eyebrow">10</span>
+  <h2>Pi validation checklist</h2>
+  <p class="prose">Commands and pass criteria are in <code>experiments/terminal-investigation/README.md</code>. Installing kitty is the only system change; it is yours to make.</p>
+  <ol class="checklist prose">
+    <li>Record OS release, panel output mode (<code>wlr-randr</code>), OpenGL version and renderer (<code>glxinfo -B</code>), Echo's default source.</li>
+    <li>Run <code>pi_probe.py</code> in the current LXTerminal profile: record the grid and cell size, photograph the samples.</li>
+    <li>Run <code>pi_probe.py</code> in kitty full screen at font sizes 8–11: all four capabilities should report true; photograph large-text lines.</li>
+    <li>Run <code>kitty_textsize_demo.py</code> for 10 minutes, pressing <code>r</code> and <code>h</code>: no fragments, no sideways shifts, no flicker.</li>
+    <li>Run <code>kitty_graphics_demo.py</code> with music playing, in both update modes, both media and all styles: note fps, process and kitty CPU, flicker.</li>
+    <li>Run <code>visualisers.py</code>: renderer timings on the Pi.</li>
+    <li>Run kitty and the Firefox kiosk together for an hour: no audio dropouts, flat memory, normal temperature.</li>
+    <li>Confirm the panel window lands on the 5.6-inch output under Labwc when launched as kitty (window rule by title or class).</li>
+  </ol>
+</section>
+
+<section class="spec">
+  <span class="eyebrow">Speculative, not part of the recommendation</span>
+  <h2>Ideas worth trying later</h2>
+  <ul class="prose">
+    <li>Palette-driven visuals that crossfade with Aurora's album palette on track change.</li>
+    <li>A spectrogram tinted by the cover, or the cover dissolving into the spectrum at quiet passages.</li>
+    <li>Stereo field (goniometer) display, once Echo publishes two channels.</li>
+    <li>Lyric lines that slide up at the 2× size as they change (kitty fractional scales give in-between sizes).</li>
+    <li>A supporter-only visualiser style, if the supporter features go ahead.</li>
+  </ul>
+</section>
+
+<section>
+  <span class="eyebrow">Sources</span>
+  <ul class="prose" style="font-size:0.9rem">
+    <li><a href="https://sw.kovidgoyal.net/kitty/text-sizing-protocol/">kitty text sizing protocol</a> and <a href="https://sw.kovidgoyal.net/kitty/graphics-protocol/">graphics protocol</a></li>
+    <li>kitty source: <code>kitty/data-types.h</code> (OpenGL 3.1 on Linux, 3.3 on macOS), master and v0.41.1</li>
+    <li><a href="https://packages.debian.org/trixie/kitty">Debian Trixie: kitty 0.41.1</a>, <a href="https://packages.debian.org/trixie/foot">foot 1.21.0</a>, <a href="https://packages.debian.org/trixie/alacritty">alacritty 0.15.1</a>; sources.debian.org for VTE 0.80.1 and LXTerminal 0.4.1</li>
+    <li><a href="https://codeberg.org/dnkl/foot/raw/branch/master/CHANGELOG.md">foot changelog</a> (OSC 66 width only, 1.21.0)</li>
+    <li><a href="https://raw.githubusercontent.com/lnqs/textual-image/main/README.md">textual-image README</a></li>
+    <li><a href="https://terminfo-dev.pages.dev/extensions/osc66-text-sizing">terminfo-dev: OSC 66 support</a> and <a href="https://terminfo-dev.pages.dev/terminals/wezterm">WezTerm</a></li>
+    <li><a href="https://fosdem.org/schedule/event/BMFQSE-raspberry-pi-gpu-drivers-from-bookworm-to-trixie">FOSDEM 2026: Raspberry Pi GPU drivers from Bookworm to Trixie</a>; <a href="https://docs.mesa3d.org/drivers/v3d.html">Mesa V3D driver docs</a></li>
+    <li><a href="https://forums.opensuse.org/t/ghostty-unble-to-acqcuire-an-opengl-context-for-rendering/191431">Ghostty OpenGL context report</a>; <a href="https://api.github.com/repos/wezterm/wezterm/releases/latest">WezTerm latest release</a></li>
+  </ul>
+</section>
+</main>
