@@ -426,6 +426,7 @@ EMBER_UI_KEYS = {
     "system_refresh_s", "log_refresh_s", "log_path", "structured_log_path",
     "structured_log_required", "metadata_dead_grace_s", "art_dead_grace_s", "waveform_key",
     "waveform_samples", "safe_margin_cells", "diagnostics_scroll_step_s", "large_lyrics",
+    "scope_pixel_fps", "scope_image_update",
 }
 
 
@@ -445,6 +446,8 @@ def validate_ember_ui(cfg: Mapping[str, Any]) -> None:
     _numbers(component, cfg, ("ui_brightness_floor", "ui_brightness_ceiling"), minimum=0.0, maximum=1.0)
     _numbers(component, cfg, ("system_refresh_s", "log_refresh_s", "metadata_dead_grace_s", "art_dead_grace_s",
                               "diagnostics_scroll_step_s"), minimum=0.0)
+    _numbers(component, cfg, ("scope_pixel_fps",), minimum=1.0, maximum=60.0)
+    _choice(component, cfg, "scope_image_update", ("replace", "edit"))
 
 
 RICH_PRESENCE_KEYS = {"proc_name", "enabled", "discord", "presence"}

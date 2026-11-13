@@ -18,19 +18,20 @@ import re
 import signal
 import subprocess
 import time
-from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Deque, Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 import dot_matrix
+import kitty_graphics
 import synapse as bus
 from spirit_messages import DEFAULT_ROLE_STYLES
 from runtime_config import load_yaml_mapping
+from scope_phosphor import PhosphorScope
 
 try:
     from rich.cells import cell_len
@@ -82,6 +83,11 @@ DEFAULTS = {
     "safe_margin_cells": 1,
     # Draw the current lyric line as large dot-matrix capitals when it fits.
     "large_lyrics": True,
+    # Phosphor scope frames sent to kitty per second, and how each frame
+    # reaches the image: "replace" (send it as a new image) or "edit"
+    # (rewrite the existing image in place; lighter, but not yet proven).
+    "scope_pixel_fps": 30.0,
+    "scope_image_update": "replace",
 }
 
 from contracts import (  # noqa: E402
@@ -140,7 +146,7 @@ class Region:
 
 # ---- Layout -----------------------------------------------------------------
 # The layout is code-owned and computed from the live terminal grid, which is
-# set by the LXTerminal profile's font size. A bigger font means fewer cells,
+# set by the panel terminal's font size (see panel_terminal.py). A bigger font means fewer cells,
 # so every rule below must still hold from about 56 × 20 up to 80 × 60.
 # Coordinates are Textual cells, not pixels.
 
@@ -165,6 +171,8 @@ LYRICS_MIN_H = 3 + PANEL_CHROME_H
 # would fit only short lines, so the text would flip size from line to line.
 LARGE_LYRIC_MIN_ROWS = 4
 LARGE_LYRIC_MIN_CHARS = 48
+# kitty image id for the Scope page (any 24-bit value not used elsewhere).
+SCOPE_IMAGE_ID = 0xEB5C01
 CONSOLE_STATUS_DEFAULT_LINES = 3
 
 PAGES = ("now", "scope", "info", "console")
@@ -1153,171 +1161,79 @@ class LogTail:
 
 
 class ScopeWidget(Widget):
-    """Ember CRT: ivory live trace with a genuinely visible palette halo."""
+    """Phosphor oscilloscope, drawn in pixels by kitty from Echo's waveform.
+
+    The widget's own text is kitty image placeholders (kitty_graphics.py),
+    which only change when the widget is resized, so Textual does not redraw
+    anything while the trace moves. Each frame is rendered by
+    scope_phosphor.PhosphorScope and written to the terminal as a graphics
+    command, no faster than ``fps``. Outside kitty the panel says so.
+    """
 
     DEFAULT_CSS = """
     ScopeWidget { overflow: hidden hidden; background: #0b0305; }
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, image_id: int = SCOPE_IMAGE_ID, **kwargs) -> None:
         """Initialize configuration, dependencies, and runtime state."""
         super().__init__(**kwargs)
-        self.samples = np.zeros(160, dtype=np.float32)
-        # A small history keeps motion coherent without becoming expensive at 50 Hz.
-        self._history: Deque[np.ndarray] = deque(maxlen=4)
-        self._scale = 0.05
-        self.trail_colour = (214, 120, 45)
-        self.core_colour = (255, 245, 214)
+        self.kitty = kitty_graphics.is_kitty()
+        self.image_id = image_id
+        self.renderer = PhosphorScope()
+        self.fps = 30.0
+        self.update_mode = "replace"
+        self._stream: Optional[kitty_graphics.ImageStream] = None
+        self._cell_px: Optional[Tuple[int, int]] = None
+        self._last_frame_at = 0.0
 
-    @staticmethod
-    def _visible_colour(rgb: Tuple[int, int, int], minimum_luma: float = 126.0) -> Tuple[int, int, int]:
-        """Lift and saturate a palette colour so it survives a dark terminal."""
-        r, g, b = (max(0, min(255, int(v))) for v in rgb)
-        luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
-        if luma < 1.0:
-            return (210, 95, 28)
-        if luma < minimum_luma:
-            scale = min(3.5, minimum_luma / luma)
-            r, g, b = (min(255, int(round(v * scale))) for v in (r, g, b))
+    def configure(self, fps: float, update_mode: str) -> None:
+        """Apply the UI configuration's frame rate and image update mode."""
+        self.fps = max(1.0, float(fps))
+        self.update_mode = update_mode
 
-        # Preserve the selected palette's character, but never let a grey/dark
-        # album silently erase the Ember halo.
-        hi, lo = max(r, g, b), min(r, g, b)
-        if hi - lo < 38:
-            r = min(255, max(r, 192))
-            g = min(255, max(g, 78))
-            b = min(255, max(b, 28))
-        return (r, g, b)
-
-    @staticmethod
-    def _resample(values: np.ndarray, width: int) -> np.ndarray:
-        """Return the resample result."""
-        if values.size < 2:
-            return np.zeros(width, dtype=np.float32)
-        x_old = np.linspace(0.0, 1.0, values.size, dtype=np.float32)
-        x_new = np.linspace(0.0, 1.0, width, dtype=np.float32)
-        return np.interp(x_new, x_old, values).astype(np.float32)
-
-    def set_waveform(self, values: Sequence[float], colour: Tuple[int, int, int]) -> None:
-        """Set waveform."""
-        array = np.asarray(values, dtype=np.float32).reshape(-1)
-        if array.size:
-            self.samples = array
-            self._history.append(array.copy())
-        self.trail_colour = self._visible_colour(colour)
-        self.refresh()
-
-    def _y_positions(self, values: np.ndarray, width: int, height: int, scale: float) -> List[int]:
-        """Return the y positions result."""
-        samples = self._resample(values, width)
-        normal = np.clip(samples / max(0.015, scale), -1.0, 1.0)
-        centre = (height - 1) / 2.0
-        return [max(0, min(height - 1, int(round(centre - value * centre * 0.90)))) for value in normal]
-
-    def _write_cell(
-        self,
-        glyphs: List[List[str]],
-        styles: List[List[Optional[str]]],
-        y: int,
-        x: int,
-        glyph: str,
-        style: str,
-        *,
-        overwrite: bool = True,
-    ) -> None:
-        """Write cell."""
-        if 0 <= y < len(glyphs) and 0 <= x < len(glyphs[0]):
-            if overwrite or glyphs[y][x] in (" ", "·", "┊"):
-                glyphs[y][x] = glyph
-                styles[y][x] = style
+    def _write(self, data: str) -> None:
+        driver = getattr(self.app, "_driver", None)
+        if driver is not None:
+            driver.write(data)
 
     def render(self) -> Text:
-        """Return the render result."""
-        width = max(1, self.size.width)
-        height = max(3, self.size.height)
-        current = self._resample(self.samples, width)
-        peak = max(0.015, float(np.percentile(np.abs(current), 98)))
-        self._scale = self._scale * 0.84 + peak * 0.16
+        """Placeholders kitty replaces with the image, or a notice elsewhere."""
+        if not self.kitty:
+            return Text("The scope is drawn by the kitty terminal; this terminal cannot show it.",
+                        style="italic #8f5f50")
+        width, height = self.size.width, self.size.height
+        r, g, b = kitty_graphics.id_colour(self.image_id)
+        return Text("\n".join(kitty_graphics.placeholder_rows(width, height)), style=f"rgb({r},{g},{b})")
 
-        glyphs = [[" " for _ in range(width)] for _ in range(height)]
-        styles: List[List[Optional[str]]] = [[None for _ in range(width)] for _ in range(height)]
-        centre = int(round((height - 1) / 2.0))
-        grid_style = rgb_style((72, 42, 20))
-        division_style = rgb_style((45, 29, 17))
+    def on_resize(self, event) -> None:
+        """The cell grid changed: measure cells again and re-place the image."""
+        self._cell_px = None
+        if self._stream is not None:
+            self._stream.reset()
 
-        # Fixed, readable CRT graticule.
-        division = max(8, width // 8)
-        for x in range(width):
-            glyphs[centre][x] = "·"
-            styles[centre][x] = grid_style
-            if x % division == 0:
-                for y in range(0, height, 2):
-                    if y != centre:
-                        glyphs[y][x] = "┊"
-                        styles[y][x] = division_style
+    def set_waveform(self, values: Sequence[float], colour: Tuple[int, int, int]) -> None:
+        """Draw and send one frame, at most ``fps`` times a second."""
+        if not self.kitty:
+            return
+        now = time.monotonic()
+        if now - self._last_frame_at < 1.0 / self.fps:
+            return
+        cols, rows = self.size.width, self.size.height
+        if cols < 2 or rows < 2:
+            return
+        self._last_frame_at = now
+        if self._cell_px is None:
+            self._cell_px = kitty_graphics.cell_pixels() or (8, 16)
+        if self._stream is None or self._stream.mode != self.update_mode:
+            self._stream = kitty_graphics.ImageStream(self._write, self.image_id, self.update_mode)
+        cell_w, cell_h = self._cell_px
+        frame = self.renderer.render(values, colour, (cols * cell_w, rows * cell_h))
+        self._stream.send(frame, cols, rows)
 
-        # Persistence: older traces are coloured dotted ghosts. They are
-        # intentionally rendered before the live halo/core.
-        history = list(self._history)
-        historic_style = rgb_style(self.trail_colour)
-        for age, historic in enumerate(history[:-1]):
-            positions = self._y_positions(historic, width, height, self._scale)
-            stride = 2 if age < max(1, len(history) - 2) else 1
-            for x, y in enumerate(positions):
-                if x % stride == 0:
-                    self._write_cell(glyphs, styles, y, x, "·", historic_style, overwrite=False)
-
-        live_positions = self._y_positions(self.samples, width, height, self._scale)
-        halo_style = rgb_style(self.trail_colour)
-        # This is the part the previous renderer failed to make visible:
-        # explicit, fully opaque palette-coloured cells above and below the
-        # ivory line. No pretend alpha, no near-black terminal mud.
-        for x, y in enumerate(live_positions):
-            self._write_cell(glyphs, styles, y - 1, x, "·", halo_style, overwrite=False)
-            self._write_cell(glyphs, styles, y + 1, x, "·", halo_style, overwrite=False)
-            if x > 0:
-                previous = live_positions[x - 1]
-                lo, hi = sorted((previous, y))
-                for row in range(lo, hi + 1):
-                    if row != y:
-                        self._write_cell(glyphs, styles, row, x, "·", halo_style, overwrite=False)
-
-        # Live trace is always unmistakably ivory and is drawn last.
-        core_style = rgb_style(self.core_colour)
-        join_style = rgb_style((244, 214, 164))
-        previous: Optional[int] = None
-        for x, y in enumerate(live_positions):
-            if previous is not None:
-                lo, hi = sorted((previous, y))
-                for row in range(lo, hi + 1):
-                    self._write_cell(
-                        glyphs,
-                        styles,
-                        row,
-                        x,
-                        "│" if row not in (previous, y) else "•",
-                        join_style if row not in (previous, y) else core_style,
-                    )
-            else:
-                self._write_cell(glyphs, styles, y, x, "•", core_style)
-            previous = y
-
-        out = Text()
-        for row in range(height):
-            run_style = styles[row][0]
-            run = [glyphs[row][0]]
-            for col in range(1, width):
-                style = styles[row][col]
-                if style == run_style:
-                    run.append(glyphs[row][col])
-                else:
-                    out.append("".join(run), style=run_style)
-                    run_style = style
-                    run = [glyphs[row][col]]
-            out.append("".join(run), style=run_style)
-            if row < height - 1:
-                out.append("\n")
-        return out
+    def on_unmount(self) -> None:
+        """Remove the image from the terminal when the UI closes."""
+        if self._stream is not None:
+            self._stream.delete()
 
 
 class AlbumArtWidget(Widget):
@@ -1528,6 +1444,9 @@ class EmberUI(App[None]):
         """Handle the on mount lifecycle step."""
         for widget_id, title in PANEL_TITLES.items():
             self.query_one(f"#{widget_id}").border_title = title
+        self.query_one("#scope-wave", ScopeWidget).configure(
+            float(self.cfg.get("scope_pixel_fps", 30.0)), str(self.cfg.get("scope_image_update", "replace"))
+        )
         self._set_page("now")
         interval = 1.0 / max(2, int(self.cfg.get("update_hz", 20)))
         self.set_interval(interval, self.refresh_frame)

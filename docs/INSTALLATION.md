@@ -165,7 +165,8 @@ systemctl --user enable --now emberdeck.service ember-ui.service ember-browser.s
 
 The repository currently includes a Textual `ember-ui.service` and a Firefox kiosk launcher.
 
-- Textual panel: `ember-ui.service` opens the diagnostic UI in LXTerminal; the `emberdeck` LXTerminal profile and Labwc graphical session must exist.
+- Textual panel: `ember-ui.service` opens the UI in the kitty terminal, which draws the Scope page's oscilloscope through its graphics protocol, so install it first: `sudo apt install kitty` (Debian Trixie ships 0.41.1; 0.28 or newer is needed). `launch_ember_ui.sh` passes kitty the shipped `kitty-panel.conf`, so a personal `~/.config/kitty/kitty.conf` never affects the panel. If an `emberdeck` LXTerminal profile exists (`~/.config/lxterminal/lxterminal-emberdeck.conf`), its font is reused, and a Labwc window rule written for that LXTerminal panel keeps matching; `panel_terminal.py` only reads those files. The Labwc graphical session must exist.
+- Updating an existing Deck: the USB update built by `tools/usb_update/build.py` installs kitty, backs up `~/EmberDeck`, copies the new code in without changing any config file, and rolls itself back if the Deck does not come up healthy. Its `README.txt` has the steps.
 - Firefox kiosk: `ember-browser.service` waits up to 90 seconds for Wayland and `http://127.0.0.1:32500` before systemd retries it.
 
 ## Shutdown helper and uinput
