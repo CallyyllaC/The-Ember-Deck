@@ -88,7 +88,7 @@ Configuration files live in `EmberEngine/configs`:
 | `artwork_service.yaml` | Local Discord artwork origin (optional, disabled by default) | No |
 | `rich_presence.yaml` | Discord Rich Presence (optional) | No; the Discord application ID is not secret |
 | `discord_secrets.yaml` | Discord access/refresh tokens, written by the worker (gitignored, mode 0600) | Yes; never commit |
-| `<name>.local.yaml` | This Deck's own public values merged over `minstrel.yaml`, `rich_presence.yaml` and `artwork_service.yaml` (gitignored; see [CONFIGURATION.md](CONFIGURATION.md#local-overrides-namelocalyaml)). Discord setup: [ENABLING_DISCORD_RICH_PRESENCE.md](ENABLING_DISCORD_RICH_PRESENCE.md) | No, but personal |
+| `<name>.local.yaml` | This Deck's own values merged over the matching `<name>.yaml`, for any worker or the UI (gitignored; see [CONFIGURATION.md](CONFIGURATION.md#local-overrides-namelocalyaml)). Discord setup: [ENABLING_DISCORD_RICH_PRESENCE.md](ENABLING_DISCORD_RICH_PRESENCE.md) | No, but personal |
 | `mpris_bridge.yaml` | MPRIS bridge | No |
 | `pawprint.yaml` | Pawprint | No |
 | `pawprint_state.yaml` | Persisted control state | No |

@@ -28,7 +28,6 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
-import yaml
 
 import synapse as bus
 from contracts import (
@@ -40,7 +39,7 @@ from contracts import (
     PLAY_STOPPED,
 )
 from whisper_daemon import log_error, log_heartbeat, log_info
-from runtime_config import ConfigError, require_mapping, validate_mpris_bridge
+from runtime_config import ConfigError, load_yaml_mapping, validate_mpris_bridge
 
 try:  # Artwork remains optional. Playback and metadata must survive without it.
     from PIL import Image, ImageOps
@@ -128,7 +127,7 @@ def load_cfg() -> dict:
     path = Path(raw) if raw else Path(__file__).resolve().parent / "configs" / "mpris_bridge.yaml"
     loaded: dict = {}
     if path.is_file():
-        loaded = require_mapping("mpris_bridge", yaml.safe_load(path.read_text(encoding="utf-8")))
+        loaded = load_yaml_mapping(path, "mpris_bridge")
     cfg = DEFAULTS.copy()
     cfg.update(loaded)
     validate_mpris_bridge(cfg)

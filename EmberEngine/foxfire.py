@@ -26,7 +26,7 @@ Writes:
 Heartbeat:
   /proc/<proc_name>/heartbeat_ms and /proc/<proc_name>/hb_seq (synapse.Heartbeat)
 """
-import os, sys, time, math, yaml, numpy as np
+import os, sys, time, math, numpy as np
 from pathlib import Path
 from typing import Any
 import synapse as bus
@@ -34,7 +34,7 @@ import signal
 import inspect
 
 from whisper_daemon import log_info, log_error, log_event, log_heartbeat
-from runtime_config import ConfigError, require_mapping, validate_foxfire
+from runtime_config import ConfigError, load_yaml_mapping, validate_foxfire
 
 epsilon=1e-12
 # ---------- defaults ----------
@@ -71,8 +71,7 @@ def load_cfg() -> dict[str, Any]:
     p = os.environ.get("CONFIG_PATH")
     cfg = {}
     if p and Path(p).exists():
-        with open(p, "r", encoding="utf-8") as f:
-            cfg = require_mapping("foxfire", yaml.safe_load(f))
+        cfg = load_yaml_mapping(Path(p), "foxfire")
     out = DEFAULTS.copy()
     out.update(cfg)
     validate_foxfire(out)

@@ -26,10 +26,10 @@ from pathlib import Path
 from typing import Deque, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
-import yaml
 
 import synapse as bus
 from spirit_messages import DEFAULT_ROLE_STYLES
+from runtime_config import load_yaml_mapping
 
 try:
     from rich.cells import cell_len
@@ -118,7 +118,7 @@ def load_cfg() -> dict:
     path = Path(os.environ.get("CONFIG_PATH", BASE / "configs" / "ember_ui.yaml"))
     loaded: dict = {}
     if path.is_file():
-        loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        loaded = load_yaml_mapping(path, "ember_ui")
     cfg = DEFAULTS.copy()
     cfg.update(loaded)
     cfg["_config_path"] = path

@@ -77,7 +77,7 @@ from pawprint_logic import (
     hold_reached,
     remap_normalised_voltage,
 )
-from runtime_config import ConfigError, require_mapping, validate_pawprint
+from runtime_config import ConfigError, load_yaml_mapping, validate_pawprint
 
 
 DEFAULTS = {
@@ -648,8 +648,7 @@ def load_cfg() -> dict:
     config_path = Path(raw_config_path) if raw_config_path else None
     loaded = {}
     if config_path is not None and config_path.is_file():
-        with config_path.open("r", encoding="utf-8") as fh:
-            loaded = require_mapping("pawprint", yaml.safe_load(fh))
+        loaded = load_yaml_mapping(config_path, "pawprint")
 
     cfg = DEFAULTS.copy()
     cfg.update(loaded)

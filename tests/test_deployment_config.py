@@ -162,6 +162,99 @@ class LocalOverlayTests(unittest.TestCase):
         self.assertEqual(runtime_config.check_config_dir(self.tmp)["artwork_service"], "ok")
 
 
+# One override per worker that reads its YAML itself rather than through a
+# shared loader: (option, a valid value that differs from the shipped one).
+WORKER_OVERRIDES = {
+    "pawprint": ("poll_hz", 40),
+    "echo": ("fps", 30),
+    "foxfire": ("fps", 30),
+    "willo_wisp": ("pixel_max_ma", 30),
+    "aurora": ("update_hz", 5.0),
+    "hdmi2_source_controller": ("poll_hz", 5.0),
+    "mpris_bridge": ("refresh_s", 1.2),
+    "whisper_daemon": ("fps", 5.0),
+    "ember_ui": ("update_hz", 25),
+}
+# Workers whose load_cfg() validates strictly (Whisper and the UI are checked
+# only by the pre-deploy check; see runtime_config.validate_whisper_daemon).
+STRICT_WORKERS = ("pawprint", "echo", "foxfire", "willo_wisp", "aurora", "hdmi2_source_controller", "mpris_bridge")
+
+
+@unittest.skipUnless(HAS_YAML, "PyYAML is required")
+class WorkerOverlayTests(unittest.TestCase):
+    """Every worker honours ``<name>.local.yaml`` exactly as the pre-deploy check does."""
+
+    def setUp(self):
+        from _support import import_engine_module
+        self.import_module = import_engine_module
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        for component in WORKER_OVERRIDES:
+            # The shipped template only: a developer's own overlay must not leak in.
+            shutil.copyfile(CONFIGS / f"{component}.yaml", self.tmp / f"{component}.yaml")
+
+    def overlay(self, component, text):
+        (self.tmp / f"{component}.local.yaml").write_text(text, encoding="utf-8")
+
+    def load(self, component):
+        module = self.import_module(component)
+        with mock.patch.dict("os.environ", {"CONFIG_PATH": str(self.tmp / f"{component}.yaml")}):
+            return module.load_cfg()
+
+    def test_overlay_values_win_over_the_shipped_template(self):
+        for component, (option, value) in WORKER_OVERRIDES.items():
+            with self.subTest(component=component):
+                self.assertNotEqual(self.load(component)[option], value, "pick a value that differs")
+                self.overlay(component, f"{option}: {value}\n")
+                cfg = self.load(component)
+                self.assertEqual(cfg[option], value)
+                self.assertEqual(cfg["proc_name"], component, "the rest of the template still applies")
+
+    def test_absent_or_empty_overlay_leaves_the_template_unchanged(self):
+        import yaml
+        for component in WORKER_OVERRIDES:
+            with self.subTest(component=component):
+                template = yaml.safe_load((self.tmp / f"{component}.yaml").read_text(encoding="utf-8")) or {}
+                without = self.load(component)
+                for option, value in template.items():
+                    if option not in ("state_path",):  # Pawprint resolves this one to an absolute path
+                        self.assertEqual(without[option], value, option)
+                self.overlay(component, "# nothing yet\n")
+                self.assertEqual(self.load(component), without)
+
+    def test_malformed_overlay_stops_a_strict_worker_without_quoting_it(self):
+        for component in STRICT_WORKERS + ("ember_ui",):
+            with self.subTest(component=component):
+                self.overlay(component, "fps: [hunter2-SECRET\n")
+                with self.assertRaises(runtime_config.ConfigError) as raised:
+                    self.load(component)
+                self.assertIn(f"{component}.local.yaml", str(raised.exception))
+                self.assertNotIn("hunter2-SECRET", str(raised.exception))
+                self.overlay(component, "- a list\n")
+                with self.assertRaisesRegex(runtime_config.ConfigError, "must contain a YAML mapping"):
+                    self.load(component)
+
+    def test_whisper_stays_lenient_with_a_malformed_overlay(self):
+        import whisper_daemon
+        self.overlay("whisper_daemon", "fps: [oops\n")
+        self.assertEqual(self.load("whisper_daemon"), dict(whisper_daemon.DEFAULTS))
+
+    def test_runtime_loading_and_the_pre_deploy_check_agree(self):
+        self.assertEqual({c: runtime_config.check_config_dir(self.tmp).get(c) for c in WORKER_OVERRIDES},
+                         {c: "ok" for c in WORKER_OVERRIDES})
+        for component in STRICT_WORKERS:
+            with self.subTest(component=component):
+                self.overlay(component, "not_an_option: 1\n")
+                checked = runtime_config.check_config_dir(self.tmp)[component]
+                self.assertIn("unknown option", checked)
+                with self.assertRaisesRegex(runtime_config.ConfigError, "unknown option.*not_an_option"):
+                    self.load(component)
+                option, value = WORKER_OVERRIDES[component]
+                self.overlay(component, f"{option}: {value}\n")
+                self.assertEqual(runtime_config.check_config_dir(self.tmp)[component], "ok")
+                self.assertEqual(self.load(component)[option], value)
+
+
 @unittest.skipUnless(HAS_YAML, "PyYAML is required")
 class ArtworkServiceConfigurationTests(unittest.TestCase):
     def setUp(self):

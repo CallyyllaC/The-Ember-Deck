@@ -281,11 +281,11 @@ Both workers use `restart_scope="worker"`: their failures restart only themselve
 
 ## Local overrides (`<name>.local.yaml`)
 
-`minstrel.yaml`, `rich_presence.yaml` and `artwork_service.yaml` are shipped as portable templates without personal values. Put this Deck's own public values (Plex names, the Discord application ID, the artwork hostname, local paths, preferences) in `configs/<name>.local.yaml` beside the template, for example `configs/rich_presence.local.yaml`. It is merged on top of the template when the worker starts and when `runtime_config.py configs` runs: nested sections key by key, so it needs only the options you change.
+Every file in `configs/` that a worker or the UI reads at start (`pawprint.yaml`, `echo.yaml`, `foxfire.yaml`, `willo_wisp.yaml`, `aurora.yaml`, `hdmi2_source_controller.yaml`, `mpris_bridge.yaml`, `minstrel.yaml`, `rich_presence.yaml`, `artwork_service.yaml`, `whisper_daemon.yaml` and `ember_ui.yaml`) can be overridden by `configs/<name>.local.yaml` beside it. `minstrel.yaml`, `rich_presence.yaml` and `artwork_service.yaml` are shipped as portable templates without personal values, so this Deck's own public values (Plex names, the Discord application ID, the artwork hostname) go in their overlays; the same works for per-Deck tuning such as pot calibration in `pawprint.local.yaml`, the capture `device` in `echo.local.yaml`, LED power in `willo_wisp.local.yaml` or app paths in `hdmi2_source_controller.local.yaml`. The overlay is merged on top of the template when the worker starts and when `runtime_config.py configs` runs, through the same loader: nested sections key by key, so it needs only the options you change.
 
 - Overlays are gitignored, so updates never overwrite them; copy them when moving to a new checkout or Deck.
 - They are personal, not secret. Credentials still belong only in `*_secrets.yaml`.
-- An overlay must be a YAML mapping. Like the template, it is validated strictly, and errors name the file without quoting its contents.
+- An overlay must be a YAML mapping. Like the template, it is validated strictly, and errors name the file without quoting its contents. A worker that validates its configuration at start stops with that error (exit status 2) rather than run on the template alone. Whisper is the exception: it never stops over its own configuration and falls back to its built-in defaults, so check `whisper_daemon.local.yaml` with `runtime_config.py configs`. `pawprint_state.yaml` is runtime state, not configuration, and has no overlay.
 
 ## Whisper logging
 

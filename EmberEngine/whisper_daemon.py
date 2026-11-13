@@ -170,10 +170,12 @@ def load_cfg() -> dict[str, Any]:
     cfg_path = os.environ.get("CONFIG_PATH")
     if cfg_path and Path(cfg_path).exists():
         try:
-            import yaml
-            with open(cfg_path, "r", encoding="utf-8") as handle:
-                cfg.update(yaml.safe_load(handle) or {})
+            from runtime_config import load_yaml_mapping
+            cfg.update(load_yaml_mapping(Path(cfg_path), "whisper_daemon"))
         except Exception:
+            # Deliberately lenient (see runtime_config.validate_whisper_daemon):
+            # an unreadable file or overlay means defaults, and the pre-deploy
+            # check reports the problem.
             pass
     return cfg
 

@@ -25,7 +25,6 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-import yaml
 
 import synapse as bus
 from artwork_palette import (
@@ -34,7 +33,7 @@ from artwork_palette import (
     normalise_output_colours,
 )
 from whisper_daemon import log_heartbeat, log_info
-from runtime_config import ConfigError, require_mapping, validate_aurora
+from runtime_config import ConfigError, load_yaml_mapping, validate_aurora
 
 from contracts import MEDIA_SOURCE_MPRIS as MEDIA_SOURCE_LOCAL, MEDIA_SOURCE_PLEX
 CONTROL_BRIGHTNESS = "/io/in/control/brightness"
@@ -98,8 +97,7 @@ def load_cfg() -> dict:
     path = os.environ.get("CONFIG_PATH")
     loaded = {}
     if path and Path(path).is_file():
-        with Path(path).open("r", encoding="utf-8") as fh:
-            loaded = require_mapping("aurora", yaml.safe_load(fh))
+        loaded = load_yaml_mapping(Path(path), "aurora")
 
     cfg = DEFAULTS.copy()
     cfg.update(loaded)

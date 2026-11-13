@@ -20,13 +20,12 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import yaml
 import sounddevice as sd
 
 import synapse as bus  # per-variable shared memory helpers
 
 from whisper_daemon import log_info, log_error, log_event, log_heartbeat
-from runtime_config import ConfigError, require_mapping, validate_echo
+from runtime_config import ConfigError, load_yaml_mapping, validate_echo
 
 # ---------- defaults ----------
 
@@ -55,8 +54,7 @@ def load_cfg() -> dict[str, Any]:
     cfg_path = os.environ.get("CONFIG_PATH")
     cfg: dict[str, Any] = {}
     if cfg_path and Path(cfg_path).exists():
-        with open(cfg_path, "r", encoding="utf-8") as f:
-            cfg = require_mapping("echo", yaml.safe_load(f))
+        cfg = load_yaml_mapping(Path(cfg_path), "echo")
     out = DEFAULTS.copy()
     out.update(cfg)
     validate_echo(out)

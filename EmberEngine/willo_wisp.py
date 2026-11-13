@@ -19,7 +19,6 @@ import sys
 import time
 import signal
 
-import yaml
 import numpy as np
 from typing import Any
 from pathlib import Path
@@ -28,7 +27,7 @@ import synapse as bus  # shared memory helper
 from blinkstick_rgbw import BlinkstickProRGBW
 
 from whisper_daemon import log_info, log_error, log_event, log_heartbeat
-from runtime_config import ConfigError, require_mapping, validate_willo_wisp
+from runtime_config import ConfigError, load_yaml_mapping, validate_willo_wisp
 # ----------------- keys ----------------- #
 
 LED_COUNT_KEY   = "/leds/main/led_count"
@@ -49,8 +48,7 @@ def load_cfg() -> dict[str, Any]:
     p = os.environ.get("CONFIG_PATH")
     cfg = {}
     if p and Path(p).exists():
-        with open(p, "r", encoding="utf-8") as f:
-            cfg = require_mapping("willo_wisp", yaml.safe_load(f))
+        cfg = load_yaml_mapping(Path(p), "willo_wisp")
     out = DEFAULTS.copy()
     out.update(cfg)
     validate_willo_wisp(out)

@@ -26,12 +26,11 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-import yaml
 
 import synapse as bus
 from contracts import HDMI2_SOURCE_PLEX, HDMI2_SOURCE_RADIO, HDMI2_SOURCE_YOUTUBE
 from whisper_daemon import log_error, log_heartbeat, log_info
-from runtime_config import ConfigError, require_mapping, validate_hdmi2_source_controller
+from runtime_config import ConfigError, load_yaml_mapping, validate_hdmi2_source_controller
 
 DEFAULTS = {
     "proc_name": "hdmi2_source_controller",
@@ -77,7 +76,7 @@ def load_cfg() -> dict:
     path = Path(raw) if raw else Path(__file__).resolve().parent / "configs" / "hdmi2_source_controller.yaml"
     loaded: dict = {}
     if path.is_file():
-        loaded = require_mapping("hdmi2_source_controller", yaml.safe_load(path.read_text(encoding="utf-8")))
+        loaded = load_yaml_mapping(path, "hdmi2_source_controller")
     cfg = DEFAULTS.copy()
     cfg.update(loaded)
     validate_hdmi2_source_controller(cfg)
