@@ -29,6 +29,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+import gvariant_text
 import synapse as bus
 from contracts import (
     HDMI2_SOURCE_PLEX,
@@ -426,9 +427,10 @@ class MprisBridge:
             "org.mpris.MediaPlayer2", "Identity",
         ])
         identity = ui_text(root_raw)
-        match = re.search(r"<'(.*)'>", root_raw or "")
-        if match:
-            identity = ui_text(match.group(1).replace("\\'", "'"))
+        # GLib double-quotes a string that contains ', e.g. (<"Bob's Player">,).
+        decoded = gvariant_text.first_string(root_raw) if ok else None
+        if decoded is not None:
+            identity = ui_text(" ".join(decoded.split()))
         elif not ok:
             identity = ui_text(player)
 

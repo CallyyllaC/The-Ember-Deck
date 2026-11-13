@@ -55,6 +55,7 @@ from gpiozero import Button
 from adafruit_ads1x15 import ADS1115, AnalogIn, ads1x15
 from adafruit_ht16k33.matrix import Matrix16x8
 
+import gvariant_text
 import synapse as bus
 from whisper_daemon import log_error, log_heartbeat, log_info, log_legacy, log_recovery
 from contracts import (
@@ -372,10 +373,10 @@ class BluetoothMediaController:
 
     _MAC_LINE = re.compile(r"^Device\s+([0-9A-Fa-f:]{17})(?:\s+(.*))?$")
     _BLUEZ_PATH = re.compile(r"(/org/bluez/[A-Za-z0-9_./-]+)")
-    _QUOTED = re.compile(r"'((?:\\'|[^'])*)'")
-    _TRACK_TEXT = re.compile(r"'(Title|Artist|Album)'\s*:\s*<\s*'((?:\\'|[^'])*)'\s*>")
-    _TRACK_UINT = re.compile(r"'(Duration|TrackNumber|NumberOfTracks)'\s*:\s*<\s*(?:uint32\s+)?(\d+)\s*>")
-    _UINT = re.compile(r"(?:uint32\s+)?(-?\d+)")
+    # gdbus output is read with gvariant_text, which follows GLib's printing
+    # rules: a string containing ' is double-quoted, and bytes print as hex.
+    _TRACK_TEXT_KEYS = ("Title", "Artist", "Album")
+    _TRACK_NUMBER_KEYS = ("Duration", "TrackNumber", "NumberOfTracks")
 
     def __init__(self, cfg: dict):
         """Initialize configuration, dependencies, and runtime state."""
@@ -419,23 +420,12 @@ class BluetoothMediaController:
     @staticmethod
     def _decode_variant_text(raw: str) -> str:
         """Return the decode variant text result."""
-        match = BluetoothMediaController._QUOTED.search(raw or "")
-        if match is None:
-            return "N/A"
-        # gdbus quotes apostrophes as \' and backslashes as \\. Only undo
-        # the two escapes that are relevant to a title/artist display.
-        return _ui_text(match.group(1).replace("\\'", "'").replace("\\\\", "\\"))
+        return _display_text(gvariant_text.first_string(raw))
 
     @staticmethod
     def _decode_variant_uint(raw: str, default: int = 0) -> int:
-        """Return the decode variant uint result."""
-        match = BluetoothMediaController._UINT.search(raw or "")
-        if match is None:
-            return int(default)
-        try:
-            return int(match.group(1))
-        except ValueError:
-            return int(default)
+        """The number in ``(<uint32 N>,)`` or ``(<byte 0xNN>,)``, else ``default``."""
+        return gvariant_text.variant_number(raw, default)
 
     @staticmethod
     def _parse_track(raw: str) -> Dict[str, object]:
@@ -448,13 +438,14 @@ class BluetoothMediaController:
             "TrackNumber": 0,
             "NumberOfTracks": 0,
         }
-        for key, value in BluetoothMediaController._TRACK_TEXT.findall(raw or ""):
-            values[key] = _ui_text(value.replace("\\'", "'").replace("\\\\", "\\"))
-        for key, value in BluetoothMediaController._TRACK_UINT.findall(raw or ""):
-            try:
-                values[key] = int(value)
-            except ValueError:
-                pass
+        texts = gvariant_text.dict_strings(raw)
+        numbers = gvariant_text.dict_numbers(raw)
+        for key in BluetoothMediaController._TRACK_TEXT_KEYS:
+            if key in texts:
+                values[key] = _display_text(texts[key])
+        for key in BluetoothMediaController._TRACK_NUMBER_KEYS:
+            if key in numbers:
+                values[key] = numbers[key]
         return values
 
     def refresh(self) -> BluetoothMediaState:
@@ -679,6 +670,13 @@ def _ui_text(value: object) -> str:
     """Return a stable human-facing fallback for missing metadata."""
     text = str(value or "").strip()
     return text if text else "N/A"
+
+
+def _display_text(value: Optional[str]) -> str:
+    """Decoded gdbus text for a one-line display: control characters become spaces."""
+    if value is None:
+        return "N/A"
+    return _ui_text("".join(" " if ord(c) < 32 or 127 <= ord(c) < 160 else c for c in value))
 
 
 def _utf8_prefix(value: object, max_bytes: int) -> bytes:

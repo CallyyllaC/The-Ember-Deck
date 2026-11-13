@@ -424,6 +424,21 @@ class MprisBridgeTests(unittest.TestCase):
         cfg = dict(mpris_bridge.DEFAULTS, youtube_process_hints=[])
         self.bridge = mpris_bridge.MprisBridge(cfg)
 
+    def identity_from(self, reply, ok=True):
+        def run(argv, timeout=None):
+            if argv[-1] == "Identity":
+                return ok, reply
+            return False, "not needed"
+        self.bridge._run = run
+        return self.bridge._identity_and_caps("instance1")[0]
+
+    def test_player_identity_follows_glib_quoting(self):
+        # E-4: GLib double-quotes a string that contains '.
+        self.assertEqual(self.identity_from("(<'Shortwave'>,)"), "Shortwave")
+        self.assertEqual(self.identity_from("(<\"Sam's Player\">,)"), "Sam's Player")
+        self.assertEqual(self.identity_from(r"""(<"The \"Best\" Player's">,)"""), 'The "Best" Player\'s')
+        self.assertEqual(self.identity_from("Error: no such player", ok=False), "instance1")
+
     def test_initial_bus_state_is_unavailable(self):
         self.assertEqual(self.bus.get_int("/mpris/available", -1), 0)
         self.assertEqual(self.bus.get_int("/mpris/art_valid", -1), 0)

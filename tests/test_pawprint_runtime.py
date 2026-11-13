@@ -119,6 +119,45 @@ class PawprintRuntimeTests(unittest.TestCase):
         self.assertTrue(state.playing)
         self.assertEqual((state.position_ms, state.duration_ms, state.track_number, state.track_count), (0, 0, 3, 0))
 
+    def test_bluetooth_refresh_reads_glib_quoting_and_byte_battery(self):
+        # gdbus output as GLib prints it (E-4, E-7): a string containing '
+        # is double-quoted, a byte is annotated hex. Written from GLib's
+        # rules, not captured from a phone.
+        controller = pawprint.BluetoothMediaController(self.cfg)
+        replies = {
+            "Player": "(<objectpath '/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF/player0'>,)",
+            "Status": "(<'playing'>,)",
+            "Track": ("(<{'Title': <\"Don't Stop Me Now\">, 'Artist': <'Queen'>, "
+                      "'Album': <\"Live at Wembley '86\">, 'Duration': <uint32 209000>, "
+                      "'TrackNumber': <uint32 12>, 'NumberOfTracks': <uint32 13>}>,)"),
+            "Position": "(<uint32 61000>,)",
+            "Name": "(<\"Sam's Phone\">,)",
+            "Percentage": "(<byte 0x55>,)",
+        }
+
+        def run(argv):
+            if "devices" in argv:
+                return True, "Device AA:BB:CC:DD:EE:FF Phone\n"
+            return (True, replies[argv[-1]]) if argv[-1] in replies else (False, "no such property")
+
+        controller._run = run
+        state = controller.refresh()
+        self.assertEqual((state.title, state.artist, state.album),
+                         ("Don't Stop Me Now", "Queen", "Live at Wembley '86"))
+        self.assertEqual(state.player_name, "Sam's Phone")
+        self.assertEqual((state.duration_ms, state.position_ms, state.track_number, state.track_count),
+                         (209000, 61000, 12, 13))
+        self.assertEqual(state.phone_battery_pct, 85)
+
+        self.app._publish_bluetooth_metadata(state)
+        self.assertEqual(self.bus.text("/bt/title_utf8"), "Don't Stop Me Now")
+        self.assertEqual(self.bus.get_int("/bt/phone_battery_pct"), 85)
+
+    def test_bluetooth_text_with_control_characters_stays_on_one_line(self):
+        track = pawprint.BluetoothMediaController._parse_track(
+            r"(<{'Title': <'Part 1\nPart 2'>, 'Artist': <'Tab\there'>}>,)")
+        self.assertEqual((track["Title"], track["Artist"]), ("Part 1 Part 2", "Tab here"))
+
     def test_bounded_count_keeps_ordinary_values(self):
         self.assertEqual(pawprint.bounded_count(209000), 209000)
         self.assertEqual(pawprint.bounded_count(0x7FFFFFFF), 0x7FFFFFFF)
