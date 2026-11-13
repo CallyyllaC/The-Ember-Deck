@@ -137,7 +137,10 @@ DEFAULTS = {
     "memory_warning_min_available_percent": 10.0,
     # Private tape transport controls. They are intentionally not published
     # on /io; Pawprint injects normal Linux media keys through /dev/uinput.
-    "media_keys_enabled": True,
+    # Off by default: transport keys always go to Plex, Bluetooth or MPRIS
+    # (pawprint_logic.choose_media_target never returns "none"), so nothing
+    # reaches the virtual keyboard. Kept for a setup that wants it.
+    "media_keys_enabled": False,
     "uinput_path": "/dev/uinput",
     "media_key_device_name": "Ember Deck Media Keys",
     "media_reconnect_s": 5.0,
@@ -1145,7 +1148,7 @@ class Pawprint:
 
     def _ensure_media_keys(self, now: float) -> None:
         """Handle the ensure media keys lifecycle step."""
-        if not bool(self.cfg.get("media_keys_enabled", True)):
+        if not bool(self.cfg.get("media_keys_enabled", False)):
             bus.set_int("/io/health/media_keys_ok", 0)
             return
         if self.media_keys.online:

@@ -83,8 +83,8 @@ The persisted `pawprint_state.yaml` contains `version: 1` and a `controls` mappi
 | `bluetooth_claim_threshold_s` | seconds | `2.0` | Continuous Playing time required when metadata is insufficient; filters phone notification sounds. |
 | `bluetooth_claim_linger_s` | seconds | `45.0` | Retains Bluetooth ownership across pause/brief status gaps when Bluetooth was already the active target. Active or paused Plex ownership still wins otherwise. |
 | `bluetooth_claim_min_duration_ms` | milliseconds | `30000` | Minimum track duration that helps metadata count as real media. |
-| `media_keys_enabled` | boolean | `true` | Enables fallback virtual Linux media-key device creation. Direct Plex/Bluetooth/MPRIS routes do not broadcast to it. |
-| `uinput_path` | path | `/dev/uinput` | Kernel uinput device. Requires installed module/rule. |
+| `media_keys_enabled` | boolean | `false` | Creates a virtual Linux media-key device through uinput. The transport keys always go directly to Plex, Bluetooth or MPRIS, so nothing is sent to it; leave it off unless you have a use for the device. Turning it on needs the optional uinput setup in the installation guide. |
+| `uinput_path` | path | `/dev/uinput` | Kernel uinput device, used only with `media_keys_enabled`. Requires the installed module and rule. |
 | `media_key_device_name` | string | `Ember Deck Media Keys` | Name visible to Linux input consumers. |
 | `media_reconnect_s` | seconds | `5.0` | Retry delay when uinput is unavailable. |
 | `record_source_hold_s` | seconds | `3.0` | REC hold threshold for cycling Plex → radio → YouTube. A shorter release toggles the pot bank. |

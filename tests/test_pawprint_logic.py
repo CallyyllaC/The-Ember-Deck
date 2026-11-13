@@ -27,6 +27,20 @@ from pawprint_logic import (  # noqa: E402
 
 
 class MediaRoutingTests(unittest.TestCase):
+    def test_every_routing_state_picks_a_real_target(self):
+        # Pawprint falls through to the virtual media keys only for "no
+        # target", so this is why media_keys_enabled defaults to false.
+        import itertools
+        import pawprint_logic
+        sources = (HDMI2_SOURCE_PLEX, HDMI2_SOURCE_RADIO, pawprint_logic.HDMI2_SOURCE_YOUTUBE, -1, 99)
+        targets = (MEDIA_TARGET_NONE, MEDIA_TARGET_PLEX, MEDIA_TARGET_BLUETOOTH, MEDIA_TARGET_MPRIS)
+        seen = set()
+        for flags in itertools.product((False, True), repeat=7):
+            for source, last in itertools.product(sources, targets):
+                target, _ = choose_media_target(MediaRoutingState(*flags, hdmi2_source=source, last_target=last))
+                seen.add(target)
+        self.assertEqual(seen, {MEDIA_TARGET_PLEX, MEDIA_TARGET_BLUETOOTH, MEDIA_TARGET_MPRIS})
+
     def test_active_plex_beats_bluetooth_and_mpris(self):
         target, reason = choose_media_target(MediaRoutingState(
             plex_available=True,

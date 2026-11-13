@@ -56,6 +56,26 @@ class PawprintRuntimeTests(unittest.TestCase):
         self.assertEqual(self.bus.get_int("/io/out/led/graph_override", -1), 0)
         self.assertEqual(self.bus.text("/bt/title_utf8"), "N/A")
 
+    def test_virtual_media_keys_are_off_by_default(self):
+        with mock.patch.object(self.app.media_keys, "open") as opened:
+            self.app._ensure_media_keys(100.0)
+        opened.assert_not_called()
+        self.assertEqual(self.bus.get_int("/io/health/media_keys_ok", -1), 0)
+        self.assertNotIn("virtual_media_key_setup_failed", [m.event for m in self.messages])
+
+    def test_shipped_template_leaves_virtual_media_keys_off(self):
+        import yaml
+        template = yaml.safe_load((pawprint.Path(pawprint.__file__).parent / "configs" / "pawprint.yaml")
+                                  .read_text(encoding="utf-8"))
+        self.assertIs(template["media_keys_enabled"], False)
+
+    def test_virtual_media_keys_can_still_be_enabled(self):
+        app = pawprint.Pawprint(dict(self.cfg, media_keys_enabled=True))
+        self.addCleanup(app.media_executor.shutdown, wait=False, cancel_futures=True)
+        with mock.patch.object(app.media_keys, "open", side_effect=PermissionError(13, "Permission denied")):
+            app._ensure_media_keys(100.0)
+        self.assertIn("virtual_media_key_setup_failed", [m.event for m in self.messages])
+
     def test_restart_does_not_reset_pending_hdmi2_cycle_counter(self):
         self.bus.values["/hdmi2/control/cycle_seq"] = 7
         again = pawprint.Pawprint(self.cfg)

@@ -96,9 +96,11 @@ storage_warning_min_free_gb: 2.0
 storage_warning_min_free_percent: 10.0
 memory_warning_min_available_percent: 10.0
 
-# Private tape transport. Pawprint creates a virtual Linux media-key device
-# through /dev/uinput; tape keys are intentionally not published onto /io.
-media_keys_enabled: true
+# Optional virtual Linux media-key device through /dev/uinput. Off: the tape
+# transport keys are routed directly to Plex, Bluetooth or the local MPRIS
+# player and never reach it. Enabling it needs the uinput steps in
+# docs/INSTALLATION.md.
+media_keys_enabled: false
 uinput_path: /dev/uinput
 media_key_device_name: Ember Deck Media Keys
 media_reconnect_s: 5.0

@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Changed
+- Pawprint's virtual uinput media-key device is off by default (`media_keys_enabled: false`). The tape transport keys always go directly to Plex, Bluetooth or the local MPRIS player, so nothing ever reached the device; with it on and the uinput rule missing, Pawprint logged a setup error every `media_reconnect_s`. The uinput module and udev rule are now an optional install step. An installed rule does no harm and can be left in place.
 - Every worker and the UI now honour `configs/<name>.local.yaml`, not only Minstrel, Rich Presence and the artwork service. Before, `runtime_config.py configs` validated overlays such as `pawprint.local.yaml` or `echo.local.yaml` that the worker then ignored. An existing overlay of this kind now takes effect, so check it with `runtime_config.py configs` before restarting; a malformed one stops the worker with a configuration error (Whisper falls back to its defaults).
 
 ### Fixed

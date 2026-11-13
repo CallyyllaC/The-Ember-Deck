@@ -170,7 +170,7 @@ The repository currently includes a Textual `ember-ui.service` and a Firefox kio
 
 ## Shutdown helper and uinput
 
-Pawprint needs `/dev/uinput` access for virtual media keys. Install the supplied udev and module configuration from `EmberEngine/system` using root-owned files and reload the relevant rules.
+The uinput setup below is optional. Pawprint uses `/dev/uinput` only for the virtual media-key device, which is off by default (`media_keys_enabled: false` in `pawprint.yaml`) because the transport keys are routed directly to Plex, Bluetooth or MPRIS. Skip to the shutdown helper unless you turn that option on. If you do, install the supplied udev and module configuration from `EmberEngine/system` using root-owned files and reload the relevant rules.
 
 Before installing `99-emberdeck-uinput.rules`, replace `[USERNAME]` with the Linux account that runs Ember Deck. Udev does not expand shell variables or systemd `%` specifiers in a `GROUP=` assignment, so this value must name a real local user or an intentionally configured device-access group.
 
