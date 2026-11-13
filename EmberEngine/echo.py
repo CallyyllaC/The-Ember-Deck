@@ -24,7 +24,7 @@ import sounddevice as sd
 
 import synapse as bus  # per-variable shared memory helpers
 
-from whisper_daemon import log_info, log_error, log_event, log_heartbeat
+from whisper_daemon import log_info, log_error, log_event, log_heartbeat, log_recovery
 from runtime_config import ConfigError, load_yaml_mapping, validate_echo
 
 # ---------- defaults ----------
@@ -199,6 +199,7 @@ def main() -> None:
     next_connect_at = 0.0
     stream = None
     audio_fault_active = False
+    audio_fault_key = f"{proc}:audio_capture"  # one fault per outage, cleared on reconnect
 
     try:
         while not stopping:
@@ -220,8 +221,12 @@ def main() -> None:
                     stream = candidate
                     state["stream_finished"] = False
                     bus.set_int("/io/health/audio_capture_ok", 1)
-                    event = "audio_stream_recovered" if audio_fault_active else "audio_stream_connected"
-                    log_event(proc, event, {"sr": sr, "channels": ch, "blocksize": blocksize, "device": dev})
+                    stream_info = {"sr": sr, "channels": ch, "blocksize": blocksize, "device": dev}
+                    if audio_fault_active:
+                        log_recovery(proc, "audio_stream_recovered", recovers_key=audio_fault_key,
+                                     metadata=stream_info)
+                    else:
+                        log_event(proc, "audio_stream_connected", stream_info)
                     audio_fault_active = False
                     log_info(proc, "audio_stream_started")
                 except Exception as exc:
@@ -231,7 +236,7 @@ def main() -> None:
                         except Exception:
                             pass
                     if not audio_fault_active:
-                        log_error(proc, "audio capture unavailable", str(exc))
+                        log_error(proc, "audio capture unavailable", str(exc), dedupe_key=audio_fault_key)
                     audio_fault_active = True
                     bus.set_int("/io/health/audio_capture_ok", 0)
                     next_connect_at = now + max(0.25, float(cfg.get("audio_reconnect_s", 2.0)))
@@ -253,7 +258,8 @@ def main() -> None:
                 state["have_audio"] = False
                 bus.set_int("/io/health/audio_capture_ok", 0)
                 if not audio_fault_active:
-                    log_error(proc, "audio capture stopped", "PortAudio stream became inactive")
+                    log_error(proc, "audio capture stopped", "PortAudio stream became inactive",
+                              dedupe_key=audio_fault_key)
                 audio_fault_active = True
                 next_connect_at = now + max(0.25, float(cfg.get("audio_reconnect_s", 2.0)))
 

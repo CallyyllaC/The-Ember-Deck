@@ -26,7 +26,7 @@ from pathlib import Path
 import synapse as bus  # shared memory helper
 from blinkstick_rgbw import BlinkstickProRGBW
 
-from whisper_daemon import log_info, log_error, log_event, log_heartbeat
+from whisper_daemon import log_info, log_error, log_event, log_heartbeat, log_recovery
 from runtime_config import ConfigError, load_yaml_mapping, validate_willo_wisp
 # ----------------- keys ----------------- #
 
@@ -153,6 +153,18 @@ def main():
             pixel_max_ma=pixel_max_ma,
             data_channel=data_channel,
         )
+        # Faults reported to Whisper and not yet recovered (dedupe keys).
+        open_faults: set = set()
+
+        def report(summary: str, details: str, key: str) -> None:
+            log_error(proc_name, summary, details, dedupe_key=f"{proc_name}:{key}")
+            open_faults.add(f"{proc_name}:{key}")
+
+        def recovered() -> None:
+            for key in sorted(open_faults):
+                log_recovery(proc_name, "led_connection_recovered", recovers_key=key)
+            open_faults.clear()
+
         connected = False
         connection_fault_active = False
         while not connected and not stopping:
@@ -162,15 +174,16 @@ def main():
             except Exception as exc:
                 connected = False
                 if not connection_fault_active:
-                    log_error(proc_name, "BlinkStick connection failed", str(exc))
+                    report("BlinkStick connection failed", str(exc), "blinkstick_connect")
             if not connected and not connection_fault_active:
-                log_error(proc_name, "BlinkStick unavailable", "USB controller not found")
+                report("BlinkStick unavailable", "USB controller not found", "blinkstick_unavailable")
             connection_fault_active = not connected
             bus.set_int("/io/health/led_strip_ok", int(connected))
             time.sleep(1)
             heartbeat.tick()
         if stopping:
             return
+        recovered()
 
         strip.set_brightness(1.0)
 
@@ -217,7 +230,7 @@ def main():
                 strip.show()
             except Exception as exc:
                 bus.set_int("/io/health/led_strip_ok", 0)
-                log_error(proc_name, "BlinkStick frame write failed", str(exc))
+                report("BlinkStick frame write failed", str(exc), "blinkstick_write")
                 strip.close()
                 connected = False
                 while not connected and not stopping:
@@ -230,6 +243,7 @@ def main():
                 bus.set_int("/io/health/led_strip_ok", int(connected))
                 if stopping:
                     break
+                recovered()
                 log_event(proc_name, "led_reconnected", {"data_channel": data_channel})
 
             now = time.monotonic()

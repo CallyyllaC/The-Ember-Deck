@@ -359,6 +359,32 @@ class WorkerScopeTests(unittest.TestCase):
             self.h.run_healthy(due - self.h.clock[0] + 1, "alpha", "beta")
         self.assertEqual(delays, [5, 10, 20, 40])
 
+    def test_local_restart_is_reported_recovered_after_sustained_health(self):
+        self.h.children["presence"].alive = False
+        self.h.tick()
+        self.h.run_healthy(FoundryCore.WORKER_BACKOFF_INITIAL_S + FoundryCore.WARMUP_GRACE_S, "alpha", "beta", "presence")
+        recoveries = [m for m in self.h.messages if m.kind == "recovery"]
+        self.assertEqual(recoveries, [], "not recovered while only just restarted")
+        self.h.run_healthy(FoundryCore.BACKOFF_RESET_HEALTHY_S + 2, "alpha", "beta", "presence")
+        recoveries = [m for m in self.h.messages if m.kind == "recovery"]
+        self.assertEqual([(m.event, m.metadata["recovers_key"]) for m in recoveries],
+                         [("process_worker_recovered", "FoundryCore:worker_restart:presence")])
+        errors = [m for m in self.h.messages if m.event == "process_worker_restart"]
+        self.assertEqual(errors[0].dedupe_key, "FoundryCore:worker_restart:presence", "the keys match")
+
+    def test_no_recovery_is_reported_without_a_restart(self):
+        self.h.run_healthy(FoundryCore.BACKOFF_RESET_HEALTHY_S + 10, "alpha", "beta", "presence")
+        self.assertEqual([m for m in self.h.messages if m.kind == "recovery"], [])
+
+    def test_a_restart_that_fails_again_is_not_recovered(self):
+        self.h.children["presence"].alive = False
+        self.h.tick()
+        self.h.run_healthy(FoundryCore.WORKER_BACKOFF_INITIAL_S + 100, "alpha", "beta", "presence")
+        self.h.children["presence"].alive = False
+        self.h.tick()
+        self.h.run_healthy(FoundryCore.WORKER_BACKOFF_INITIAL_S + 100, "alpha", "beta", "presence")
+        self.assertEqual([m for m in self.h.messages if m.kind == "recovery"], [])
+
     def test_shutdown_while_a_local_restart_is_pending(self):
         self.h.children["presence"].alive = False
         self.h.tick()
@@ -512,6 +538,13 @@ class BackoffPolicyTests(unittest.TestCase):
         self.assertEqual(backoff.delay_s, 20.0)
         backoff.observe(1300.0, True)
         self.assertEqual(backoff.delay_s, 5.0)
+
+    def test_observe_reports_when_health_has_been_sustained(self):
+        backoff = FoundryCore.RestartBackoff(5.0, 60.0, 300.0)
+        backoff.next_delay()
+        self.assertEqual([backoff.observe(s, True) for s in (0.0, 299.0, 300.0)], [False, False, True])
+        self.assertFalse(backoff.observe(301.0, None))
+        self.assertFalse(backoff.observe(302.0, False))
 
     def test_any_unhealthy_observation_restarts_the_health_window(self):
         backoff = FoundryCore.RestartBackoff(5.0, 60.0, 300.0)

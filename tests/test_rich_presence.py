@@ -1327,6 +1327,29 @@ class AuthenticationLifecycleTests(unittest.TestCase):
         self.assertIn("discord_token_write_failed", h.events())
         self.assertEqual(h.status(), C.DISCORD_STATUS_CONNECTED)
 
+    def test_fixed_token_file_permissions_are_reported_as_recovered(self):
+        h = Harness(self, tokens=tokens())
+        path = h.store().path
+        self.addCleanup(os.chmod, path, 0o600)
+        problem = ["discord_secrets.yaml is accessible to other users (mode 0644); run: chmod 600"]
+        with mock.patch.object(rp, "permission_problem", lambda _path: problem[0]):
+            h.tick()
+            self.assertIn("discord_token_file_permissions", h.events())
+            problem[0] = None
+            os.chmod(path, 0o400)  # the operator's chmod: only the mode changes
+            h.tick()
+        self.assertIn("discord_token_file_permissions_ok", h.events())
+        recovery = [m for m in h.messages if m.kind == "recovery" and m.event == "discord_token_file_permissions_ok"]
+        self.assertEqual(recovery[0].metadata["recovers_key"], "rich_presence:token_mode")
+
+    def test_token_file_signature_notices_a_mode_change(self):
+        h = Harness(self, tokens=tokens())
+        store = h.store()
+        self.addCleanup(os.chmod, store.path, 0o600)
+        before = store.signature()
+        os.chmod(store.path, 0o400)
+        self.assertNotEqual(store.signature(), before)
+
     def test_corrupt_token_file_is_ignored_safely(self):
         h = Harness(self)
         h.store().path.write_text(f"cache:\n  access_token: [{ACCESS}\n", encoding="utf-8")

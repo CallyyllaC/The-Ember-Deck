@@ -207,16 +207,19 @@ class RestartBackoff:
         self.healthy_since = None
         return delay
 
-    def observe(self, now: float, healthy: Optional[bool]) -> None:
+    def observe(self, now: float, healthy: Optional[bool]) -> bool:
+        """Record one health observation; True once health has been sustained."""
         if healthy is None:
-            return
+            return False
         if not healthy:
             self.healthy_since = None
-            return
+            return False
         if self.healthy_since is None:
             self.healthy_since = now
         elif now - self.healthy_since >= self.reset_after_s:
             self.delay_s = float(self.initial_s)
+            return True
+        return False
 
 
 def _group_stop(procs: Dict[str, Optional[subprocess.Popen]]) -> None:
@@ -332,6 +335,8 @@ class Supervisor:
             name: RestartBackoff(WORKER_BACKOFF_INITIAL_S, WORKER_BACKOFF_CAP_S)
             for name, scope in self.scopes.items() if scope == RESTART_SCOPE_WORKER
         }
+        # Worker-scoped restarts reported to Whisper and not yet recovered.
+        self.unrecovered_restarts: set = set()
 
     # -- group lifecycle
     def _startup_casualty(self) -> Optional[str]:
@@ -414,7 +419,13 @@ class Supervisor:
                 continue
             reason, health = self._worker_health(name, now)
             if local:
-                self.worker_backoff[name].observe(now, health)
+                settled = self.worker_backoff[name].observe(now, health)
+                if settled and name in self.unrecovered_restarts:
+                    # Healthy for as long as it takes to reset the backoff:
+                    # the same test of "recovered" the restart policy uses.
+                    self.unrecovered_restarts.discard(name)
+                    log_recovery("FoundryCore", "process_worker_recovered",
+                                 recovers_key=f"FoundryCore:worker_restart:{name}")
                 if reason:
                     self._restart_worker_later(entry, reason, now)
                 continue
@@ -435,6 +446,7 @@ class Supervisor:
         delay = self.worker_backoff[name].next_delay()
         log_error("FoundryCore", "worker_restart", f"{reason}; restarting only {name} in {delay:g} s",
                   event="process_worker_restart", dedupe_key=f"FoundryCore:worker_restart:{name}")
+        self.unrecovered_restarts.add(name)
         _group_stop({name: self.procs.get(name)})
         self.procs[name] = None
         self.pending[name] = now + delay

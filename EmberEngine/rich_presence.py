@@ -200,12 +200,13 @@ class TokenStore:
     def __init__(self, path: Path):
         self.path = Path(path)
 
-    def signature(self) -> Optional[Tuple[int, int]]:
+    def signature(self) -> Optional[Tuple[int, int, int]]:
         try:
             st = self.path.stat()
         except OSError:
             return None
-        return (st.st_mtime_ns, st.st_size)
+        # st_mode too: a chmod that fixes the permissions changes nothing else.
+        return (st.st_mtime_ns, st.st_size, st.st_mode)
 
     def load(self) -> Optional[DiscordTokens]:
         """Return stored tokens, None if absent, or raise SecretFileError (no contents)."""
@@ -318,7 +319,7 @@ class RichPresenceWorker:
         self.sdk_version: Optional[str] = None
 
         self.tokens: Optional[DiscordTokens] = None
-        self._token_signature: Optional[Tuple[int, int]] = None
+        self._token_signature: Optional[Tuple[int, int, int]] = None
         self._tokens_loaded = False
         self.token_sent = False
         self.refreshing = False
@@ -381,6 +382,8 @@ class RichPresenceWorker:
         mode = permission_problem(self.tokens_store.path)
         if mode:
             self._fault("token_mode", "discord_token_file_permissions", "Discord token file permissions", mode)
+        else:
+            self._recover("token_mode", "discord_token_file_permissions_ok")
         if loaded is not None:
             self.redact.add(loaded.access_token, loaded.refresh_token)
         if loaded != self.tokens:

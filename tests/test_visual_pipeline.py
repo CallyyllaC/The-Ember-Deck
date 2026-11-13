@@ -17,6 +17,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _support import FakeBus, capture_whisper, has_module, import_engine_module  # noqa: E402
+import whisper_daemon  # noqa: E402
 
 aurora = import_engine_module("aurora")
 foxfire = import_engine_module("foxfire")
@@ -89,6 +90,60 @@ class EchoTests(unittest.TestCase):
         self.assertIsInstance(self.opened_device("3"), int)
         self.assertEqual(self.opened_device("default"), "default")
         self.assertEqual(self.opened_device("'hw:CARD=Loopback'"), "hw:CARD=Loopback")
+
+    def test_capture_outage_is_reported_once_and_recovered_on_reconnect(self):
+        class Done(BaseException):
+            pass
+
+        class Stream:
+            active = False  # connects, then PortAudio drops it on the same pass
+
+            def start(self):
+                pass
+
+            def close(self):
+                pass
+
+        attempts = []
+
+        def input_stream(**kwargs):
+            attempts.append(kwargs)
+            if len(attempts) <= 2:
+                raise OSError("PortAudio: device unavailable")
+            if len(attempts) == 3:
+                return Stream()
+            raise Done()
+
+        clock = [0.0]
+
+        def monotonic():
+            clock[0] += 5.0  # past audio_reconnect_s on every loop pass
+            return clock[0]
+
+        use_bus(self, echo)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "echo.yaml")
+            path.write_text("device: default\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"CONFIG_PATH": str(path)}), \
+                    mock.patch.object(echo.sd, "InputStream", input_stream, create=True), \
+                    mock.patch.object(echo.signal, "signal"), \
+                    mock.patch.object(echo.time, "monotonic", monotonic), \
+                    mock.patch.object(echo.time, "sleep"), \
+                    mock.patch("builtins.print"), capture_whisper() as messages:
+                with self.assertRaises(Done):
+                    echo.main()
+        errors = [m for m in messages if m.kind == "error"]
+        recoveries = [m for m in messages if m.kind == "recovery"]
+        self.assertEqual([m.event for m in errors][:1], ["audio_capture_unavailable"])
+        self.assertEqual({m.dedupe_key for m in errors}, {"echo:audio_capture"})
+        self.assertEqual([(m.event, m.metadata["recovers_key"]) for m in recoveries],
+                         [("audio_stream_recovered", "echo:audio_capture")])
+        # Whisper's mood follows: wounded during the outage, not after it.
+        scheduler = whisper_daemon.WhisperScheduler(dict(whisper_daemon.DEFAULTS), now=0.0)
+        scheduler.enqueue(errors[0], now=1.0)
+        self.assertEqual(scheduler.mood(now=1.0), "wounded")
+        scheduler.enqueue(recoveries[0], now=2.0)
+        self.assertNotEqual(scheduler.mood(now=2.0), "wounded")
 
     def test_invalid_device_values_are_rejected(self):
         defaults = dict(echo.DEFAULTS)
@@ -165,6 +220,51 @@ class FoxfireTests(unittest.TestCase):
 
 
 class WilloWispTests(unittest.TestCase):
+    def test_blinkstick_faults_are_recovered_when_the_strip_reconnects(self):
+        class Done(BaseException):
+            pass
+
+        connects = [False, True, True]  # missing at start, found, found again after a write error
+        shows = [OSError("USB write timeout"), None, Done()]
+
+        class Strip:
+            def __init__(self, **kwargs):
+                pass
+
+            def connect(self):
+                return connects.pop(0)
+
+            def set_brightness(self, value):
+                pass
+
+            def set_pixel(self, index, rgbw):
+                pass
+
+            def show(self):
+                outcome = shows.pop(0)
+                if outcome is not None:
+                    raise outcome
+
+            def close(self):
+                pass
+
+            def off(self):
+                pass
+
+        bus = use_bus(self, willo_wisp)
+        bus.set_array(willo_wisp.LED_FRAME_KEY, [0.5] * 8, "f32")
+        with mock.patch.dict(os.environ, {"CONFIG_PATH": ""}), \
+                mock.patch.object(willo_wisp, "BlinkstickProRGBW", Strip), \
+                mock.patch.object(willo_wisp, "wait_for_led_config", lambda *a: (2, 50.0)), \
+                mock.patch.object(willo_wisp.signal, "signal"), \
+                mock.patch.object(willo_wisp.time, "sleep"), capture_whisper() as messages:
+            with self.assertRaises(Done):
+                willo_wisp.main()
+        opened = [m.dedupe_key for m in messages if m.kind == "error"]
+        closed = [m.metadata["recovers_key"] for m in messages if m.kind == "recovery"]
+        self.assertEqual(opened, ["willo_wisp:blinkstick_unavailable", "willo_wisp:blinkstick_write"])
+        self.assertEqual(closed, opened, "every reported fault is recovered, in order")
+
     def test_rgba_alpha_scales_and_neutral_light_moves_to_white_channel(self):
         rgbw = willo_wisp.rgba_to_rgbw(np.array([[1.0, 1.0, 1.0, 0.5], [1.0, 0.0, 0.0, 1.0]], dtype=np.float32))
         self.assertEqual(rgbw.tolist(), [[0, 0, 0, 128], [255, 0, 0, 0]])
