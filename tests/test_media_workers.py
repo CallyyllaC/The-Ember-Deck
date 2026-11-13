@@ -464,6 +464,31 @@ class MprisBridgeTests(unittest.TestCase):
         bridge = mpris_bridge.MprisBridge(cfg)
         self.assertEqual(bridge._list_players(), [])
 
+    def test_unpublishable_position_and_length_are_reported_as_unknown(self):
+        # A live stream's sentinel length (int64 max microseconds) or a
+        # non-finite value must not stop the bridge.
+        for length in ("9223372036854775807", "inf", "nan", "-1"):
+            with mock.patch.object(self.bridge, "_run", return_value=(True, "Song\x1fStation\x1f\x1f" + length + "\x1f")):
+                duration_s = self.bridge._metadata("player")[3]
+            snapshot = mpris_bridge.Snapshot(player="player", available=True, play_state=mpris_bridge.PLAY_PLAYING,
+                                             title="Song", position_s=9.3e12, duration_s=duration_s,
+                                             process_id=2 ** 40)
+            self.bridge._publish(snapshot)
+            self.assertEqual(self.bus.get_int("/mpris/duration_ms", -1), 0, length)
+            self.assertEqual(self.bus.get_int("/mpris/position_ms", -1), 0, length)
+            self.assertEqual(self.bus.get_int("/mpris/process_id", -1), 0, length)
+            self.assertEqual(self.bus.text("/mpris/title_utf8"), "Song")
+
+    def test_ordinary_position_and_length_are_published_in_milliseconds(self):
+        snapshot = mpris_bridge.Snapshot(player="player", available=True, play_state=mpris_bridge.PLAY_PAUSED,
+                                         position_s=61.5, duration_s=200.0, process_id=4321)
+        self.bridge._publish(snapshot)
+        self.assertEqual(self.bus.get_int("/mpris/position_ms"), 61500)
+        self.assertEqual(self.bus.get_int("/mpris/duration_ms"), 200000)
+        self.assertEqual(self.bus.get_int("/mpris/process_id"), 4321)
+        self.assertEqual(mpris_bridge.bounded_ms(0x7FFFFFFF / 1000.0), 0x7FFFFFFF)
+        self.assertEqual(mpris_bridge.bounded_ms(0x80000000 / 1000.0), 0)
+
     def test_text_is_clipped_on_a_character_boundary(self):
         self.assertEqual(mpris_bridge.utf8_prefix("ab€", 4), b"ab")
         self.assertEqual(mpris_bridge.play_state_from_text("Paused\n"), mpris_bridge.PLAY_PAUSED)
@@ -509,6 +534,31 @@ class Hdmi2ControllerTests(unittest.TestCase):
         self.request_cycle()
         self.assertEqual(self.bus.get_int(hdmi2.KEY_STATUS), hdmi2.STATUS_ERROR)
         self.assertEqual(self.controller.current, hdmi2.HDMI2_SOURCE_PLEX)
+        # The published selection is what Pawprint routes transport keys by:
+        # it must not name a guest that is not running.
+        self.assertEqual(self.bus.get_int(hdmi2.KEY_SELECTED_SOURCE), hdmi2.HDMI2_SOURCE_PLEX)
+
+    def test_a_guest_that_cannot_start_is_skipped_and_the_cycle_returns_to_plex(self):
+        # Pear is optional. Without it the cycle used to stop at YOUTUBE for good.
+        self.controller._launch_pear.side_effect = None
+        self.controller._launch_pear.return_value = False
+        seen = []
+        for _ in range(5):
+            self.request_cycle()
+            seen.append((self.bus.get_int(hdmi2.KEY_SELECTED_SOURCE), self.bus.get_int(hdmi2.KEY_STATUS)))
+        radio = (hdmi2.HDMI2_SOURCE_RADIO, hdmi2.STATUS_ACTIVE)
+        failed = (hdmi2.HDMI2_SOURCE_PLEX, hdmi2.STATUS_ERROR)
+        self.assertEqual(seen, [radio, failed, radio, failed, radio])
+        self.assertEqual(self.controller.current, hdmi2.HDMI2_SOURCE_RADIO)
+
+    def test_error_status_clears_on_the_next_successful_selection(self):
+        self.controller._launch_shortwave.side_effect = None
+        self.controller._launch_shortwave.return_value = False
+        self.request_cycle()
+        self.controller._launch_shortwave.return_value = True
+        self.request_cycle()
+        self.assertEqual(self.bus.get_int(hdmi2.KEY_SELECTED_SOURCE), hdmi2.HDMI2_SOURCE_RADIO)
+        self.assertEqual(self.bus.get_int(hdmi2.KEY_STATUS), hdmi2.STATUS_ACTIVE)
 
     def test_startup_state_does_not_replay_old_cycle_requests(self):
         self.bus.values[hdmi2.KEY_CYCLE_SEQ] = 41

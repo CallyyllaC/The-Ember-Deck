@@ -9,7 +9,9 @@ chooses which local context occupies the HDMI-2 app slot:
 Pawprint requests a cycle through a shared counter.  The controller closes the
 old guest app, stops Plex when leaving it, launches the chosen guest app in the
 Wayland session, and installs narrow Labwc window rules that move it to HDMI-2
-before making it fullscreen.
+before making it fullscreen.  A guest that cannot be launched leaves the slot
+on PLEX with ``/hdmi2/status`` reporting the error, so a missing app is
+skipped by the cycle instead of trapping it.
 """
 from __future__ import annotations
 
@@ -392,7 +394,13 @@ class Hdmi2SourceController:
             self._publish_selected(source, STATUS_ACTIVE)
             print(f"[{self.proc_name}] HDMI-2 source: {SOURCE_NAMES[source]}", flush=True)
         else:
-            self._publish_selected(source, STATUS_ERROR)
+            # Plex has been stopped and the old guest closed, so the slot is
+            # empty. Fall back to Plex rather than leave a source selected
+            # that is not running: Pawprint routes transport keys by this
+            # value, and the next cycle must be able to move on.
+            self.current = HDMI2_SOURCE_PLEX
+            self._publish_selected(HDMI2_SOURCE_PLEX, STATUS_ERROR)
+            print(f"[{self.proc_name}] HDMI-2 source: {SOURCE_NAMES[source]} failed to start; back to PLEX", flush=True)
 
     def _consume_cycles(self) -> None:
         """Consume cycles."""

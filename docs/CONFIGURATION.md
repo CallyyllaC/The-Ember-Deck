@@ -213,6 +213,8 @@ A valid configuration without Plex identity or credentials does not stop Minstre
 
 ## HDMI-2 source controller
 
+The REC hold cycles PLEX → RADIO → YOUTUBE → PLEX. A guest app that cannot be launched (for example `pear_appimage` is missing or not executable) is logged, `/hdmi2/status` reports the error, and the slot returns to PLEX, so the next hold moves on instead of retrying the same app.
+
 | Option | Type / units | Current | Purpose |
 |:--|:--|:--|:--|
 | `proc_name` | string | `hdmi2_source_controller` | Heartbeat/log identity. |

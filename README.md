@@ -37,7 +37,6 @@ The documentation has been split into separate guides.
 | [Build story](docs/BUILD.md) | Teardown, restoration, speakers, packaging and lessons learned |
 | [Hardware and I/O](docs/HARDWARE.md) | Power design, peripherals, GPIO, I²C, controls and indicators |
 | [Software architecture](docs/SOFTWARE.md) | Runtime services, workers, shared state and source routing |
-| [Architecture reference](docs/ARCHITECTURE.md) | Process model, supervision, Synapse key registry, failure behaviour, risks and adding a worker |
 | [Configuration reference](docs/CONFIGURATION.md) | Every runtime option, units, defaults, interactions and restart requirements |
 | [Installation](docs/INSTALLATION.md) | Raspberry Pi packages, Python environment, permissions and services |
 | [Enabling Discord Rich Presence](docs/ENABLING_DISCORD_RICH_PRESENCE.md) | Optional Discord presence and hosted Plex artwork: setup, configuration, privacy and removal |
@@ -81,7 +80,7 @@ The Deck signs in to Plex unattended with your Plex account username and passwor
 
 Upgrading from an older setup? If `minstrel.yaml` still contains `username`, `password`, `url` or `token`, those values keep working, but Minstrel reports them until you move them into `minstrel_secrets.yaml`. Minstrel no longer writes tokens into `minstrel.yaml`.
 
-Setup steps are in the [installation guide](docs/INSTALLATION.md). The full precedence and refresh rules are in the [architecture reference](docs/ARCHITECTURE.md#secrets-and-plex-authentication).
+Setup steps are in the [installation guide](docs/INSTALLATION.md). The Minstrel options are in the [configuration reference](docs/CONFIGURATION.md#minstrel-plexplexamp), and the full precedence and refresh rules are described at the top of [`plex_auth.py`](EmberEngine/plex_auth.py).
 
 ## Discord Rich Presence (optional)
 

@@ -524,10 +524,10 @@ class BluetoothMediaController:
                 title=_ui_text(track.get("Title")),
                 artist=_ui_text(track.get("Artist")),
                 album=_ui_text(track.get("Album")),
-                position_ms=max(0, int(position_ms)),
-                duration_ms=max(0, int(track.get("Duration", 0) or 0)),
-                track_number=max(0, int(track.get("TrackNumber", 0) or 0)),
-                track_count=max(0, int(track.get("NumberOfTracks", 0) or 0)),
+                position_ms=bounded_count(position_ms),
+                duration_ms=bounded_count(track.get("Duration", 0)),
+                track_number=bounded_count(track.get("TrackNumber", 0)),
+                track_count=bounded_count(track.get("NumberOfTracks", 0)),
                 phone_battery_pct=max(-1, min(100, int(battery_pct))),
             )
             return self.state
@@ -700,6 +700,24 @@ def publish_utf8(key: str, value: object, max_chars: int = MEDIA_TEXT_MAX_CHARS)
     encoded = _utf8_prefix(value, size - 1)
     payload = list(encoded) + [0] * (size - len(encoded))
     bus.set_array(key, payload, dtype="u8")
+
+
+SYNAPSE_INT_MAX = 0x7FFFFFFF
+
+
+def bounded_count(value: object, maximum: int = SYNAPSE_INT_MAX) -> int:
+    """Return an externally supplied count that fits a Synapse int, else 0.
+
+    Synapse scalars are signed 32-bit. AVRCP values arrive as ``uint32`` and
+    phones use the top of that range (for example ``0xFFFFFFFF``) to mean
+    "unknown", so anything outside ``0..maximum`` is published as 0 instead
+    of raising ``struct.error`` in the I/O loop.
+    """
+    try:
+        number = int(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return number if 0 <= number <= maximum else 0
 
 
 def finite_control(value: object, fallback: float) -> float:
@@ -1217,11 +1235,14 @@ class Pawprint:
 
         bus.set_int(KEY_BT_CONNECTED, int(state.connected))
         bus.set_int(KEY_BT_PLAY_STATE, play_state)
-        bus.set_int(KEY_BT_POSITION_MS, int(state.position_ms))
-        bus.set_int(KEY_BT_DURATION_MS, int(state.duration_ms))
-        bus.set_int(KEY_BT_TRACK_NUMBER, int(state.track_number))
-        bus.set_int(KEY_BT_TRACK_COUNT, int(state.track_count))
-        bus.set_int(KEY_BT_PHONE_BATTERY_PCT, int(state.phone_battery_pct))
+        # Bounded again here: this runs unguarded in the 50 Hz loop, so a value
+        # that does not fit a Synapse int must never reach set_int().
+        bus.set_int(KEY_BT_POSITION_MS, bounded_count(state.position_ms))
+        bus.set_int(KEY_BT_DURATION_MS, bounded_count(state.duration_ms))
+        bus.set_int(KEY_BT_TRACK_NUMBER, bounded_count(state.track_number))
+        bus.set_int(KEY_BT_TRACK_COUNT, bounded_count(state.track_count))
+        battery = state.phone_battery_pct
+        bus.set_int(KEY_BT_PHONE_BATTERY_PCT, battery if isinstance(battery, int) and -1 <= battery <= 100 else -1)
         publish_utf8(KEY_BT_TITLE_UTF8, state.title)
         publish_utf8(KEY_BT_ARTIST_UTF8, state.artist)
         publish_utf8(KEY_BT_ALBUM_UTF8, state.album)

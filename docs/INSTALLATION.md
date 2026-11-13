@@ -227,6 +227,6 @@ systemctl --user status plexamp.service emberdeck.service ember-ui.service ember
 journalctl --user -u emberdeck.service -b
 ```
 
-The unit tests need no Deck hardware: on any computer with Python 3, `numpy` and `pyyaml` (plus `pillow` and `cryptography` to avoid skips), run the same two `unittest` commands from a repository checkout. GPIO, audio, BlinkStick and Plex libraries are replaced by stand-ins when they are not installed. Everything physical still has to be checked on the Pi; see the [hardware validation checklist](ARCHITECTURE.md#hardware-validation-checklist).
+The unit tests need no Deck hardware: on any computer with Python 3, `numpy` and `pyyaml` (plus `pillow` and `cryptography` to avoid skips), run the same two `unittest` commands from a repository checkout. GPIO, audio, BlinkStick and Plex libraries are replaced by stand-ins when they are not installed. Everything physical still has to be checked on the Pi.
 
 The I²C scan should show devices at `0x48` and `0x70`. Confirm the DAC, capture device, BlinkStick, both selectors, every tape key and the safe-shutdown hold before closing the enclosure.

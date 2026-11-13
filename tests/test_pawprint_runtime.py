@@ -62,6 +62,51 @@ class PawprintRuntimeTests(unittest.TestCase):
         self.addCleanup(again.media_executor.shutdown, wait=False, cancel_futures=True)
         self.assertEqual(self.bus.get_int("/hdmi2/control/cycle_seq"), 7)
 
+    # ------------------------------------------------------------ Bluetooth values from the phone
+    def test_bluetooth_numbers_outside_the_synapse_range_are_published_as_unknown(self):
+        # AVRCP numbers are uint32 and phones use the top of the range for
+        # "unknown". They must not stop the I/O loop.
+        self.app.bluetooth_media.state = pawprint.BluetoothMediaState(
+            connected=True, playing=True, status="playing", title="Song",
+            position_ms=0xFFFFFFFF, duration_ms=0xFFFFFFFF, track_number=2 ** 31, track_count=0xFFFFFFFF,
+            phone_battery_pct=250,
+        )
+        self.app._update_media_sources(100.0)
+        self.assertEqual(self.bus.get_int("/bt/connected"), 1)
+        for key in ("/bt/position_ms", "/bt/duration_ms", "/bt/track_number", "/bt/track_count"):
+            self.assertEqual(self.bus.get_int(key, -1), 0, key)
+        self.assertEqual(self.bus.get_int("/bt/phone_battery_pct"), -1)
+        self.assertEqual(self.bus.text("/bt/title_utf8"), "Song")
+
+    def test_bluetooth_refresh_treats_out_of_range_avrcp_values_as_unknown(self):
+        controller = pawprint.BluetoothMediaController(self.cfg)
+        replies = {
+            "Player": "(<objectpath '/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF/player0'>,)",
+            "Status": "(<'playing'>,)",
+            "Track": "(<{'Title': <'Song'>, 'Duration': <uint32 4294967295>, "
+                     "'TrackNumber': <uint32 3>, 'NumberOfTracks': <uint32 4294967295>}>,)",
+            "Position": "(<uint32 4294967295>,)",
+            "Name": "(<'Player'>,)",
+        }
+
+        def run(argv):
+            if "devices" in argv:
+                return True, "Device AA:BB:CC:DD:EE:FF Phone\n"
+            return (True, replies[argv[-1]]) if argv[-1] in replies else (False, "no such property")
+
+        controller._run = run
+        state = controller.refresh()
+        self.assertTrue(state.playing)
+        self.assertEqual((state.position_ms, state.duration_ms, state.track_number, state.track_count), (0, 0, 3, 0))
+
+    def test_bounded_count_keeps_ordinary_values(self):
+        self.assertEqual(pawprint.bounded_count(209000), 209000)
+        self.assertEqual(pawprint.bounded_count(0x7FFFFFFF), 0x7FFFFFFF)
+        self.assertEqual(pawprint.bounded_count(0x80000000), 0)
+        self.assertEqual(pawprint.bounded_count(-5), 0)
+        self.assertEqual(pawprint.bounded_count(None), 0)
+        self.assertEqual(pawprint.bounded_count("nonsense"), 0)
+
     # ------------------------------------------------------------ routing
     def test_play_key_reaches_plex_while_minstrel_reports_playing(self):
         self.minstrel_alive(100.0, pawprint.PLEX_PLAYING)

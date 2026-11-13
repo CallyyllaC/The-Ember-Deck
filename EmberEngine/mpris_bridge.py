@@ -164,6 +164,27 @@ def publish_text(key: str, value: object, size: int) -> None:
     bus.set_array(key, list(encoded) + [0] * (size - len(encoded)), dtype="u8")
 
 
+SYNAPSE_INT_MAX = 0x7FFFFFFF
+
+
+def bounded_ms(seconds: object) -> int:
+    """Seconds as whole milliseconds that fit a Synapse int, else 0 (unknown).
+
+    Players report live streams with no length, a sentinel length or a
+    position that only ever grows. Synapse scalars are signed 32-bit, so a
+    value that is not finite or passes about 24.8 days is published as 0
+    instead of raising in the bridge's main loop.
+    """
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        return 0
+    if not math.isfinite(value) or value <= 0.0:
+        return 0
+    milliseconds = int(round(value * 1000.0))
+    return milliseconds if milliseconds <= SYNAPSE_INT_MAX else 0
+
+
 def counter_delta(previous: int, current: int) -> int:
     """Return a bounded delta between wrapping command counters."""
     if current == previous:
@@ -342,8 +363,10 @@ class MprisBridge:
         parts = output.rstrip("\r\n").split(FIELD_SEP)
         parts += [""] * (5 - len(parts))
         try:
-            duration_s = max(0.0, float(parts[3].strip() or 0.0) / 1_000_000.0)
+            duration_s = float(parts[3].strip() or 0.0) / 1_000_000.0
         except ValueError:
+            duration_s = 0.0
+        if not math.isfinite(duration_s) or duration_s < 0.0:
             duration_s = 0.0
         return ui_text(parts[0]), ui_text(parts[1]), ui_text(parts[2]), duration_s, ui_text(parts[4])
 
@@ -498,8 +521,8 @@ class MprisBridge:
 
     def _publish(self, snap: Snapshot) -> None:
         """Handle the publish lifecycle step."""
-        position_ms = int(round(self._estimated_position(snap) * 1000.0))
-        duration_ms = int(round(max(0.0, snap.duration_s) * 1000.0))
+        duration_ms = bounded_ms(snap.duration_s)
+        position_ms = bounded_ms(self._estimated_position(snap))
         bus.set_int(KEY_AVAILABLE, int(snap.available))
         bus.set_int(KEY_PLAY_STATE, int(snap.play_state))
         bus.set_int(KEY_POSITION_MS, position_ms)
@@ -512,7 +535,7 @@ class MprisBridge:
         publish_text(KEY_PLAYER_UTF8, snap.player, self.text_size)
         publish_text(KEY_IDENTITY_UTF8, snap.identity, self.text_size)
         publish_text(KEY_SOURCE_UTF8, snap.source, self.text_size)
-        bus.set_int(KEY_PROCESS_ID, int(max(0, snap.process_id)))
+        bus.set_int(KEY_PROCESS_ID, snap.process_id if 0 <= snap.process_id <= SYNAPSE_INT_MAX else 0)
         publish_text(KEY_PROCESS_NAME_UTF8, snap.process_name, self.text_size)
         publish_text(KEY_TITLE_UTF8, snap.title, self.text_size)
         publish_text(KEY_ARTIST_UTF8, snap.artist, self.text_size)
