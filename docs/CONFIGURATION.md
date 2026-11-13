@@ -151,7 +151,7 @@ A valid configuration without Plex identity or credentials does not stop Minstre
 | `fps` | integer Hz | `50` | Spectrum/waveform publication rate. |
 | `fft_size` | integer samples | `2048` | FFT window; use a power of two. Larger improves frequency resolution and increases latency/CPU. |
 | `bins` | integer/null | `2048` in code, corrected to `fft_size/2+1` | Requested spectrum length. Echo logs and corrects mismatches; `1025` is native for FFT 2048. |
-| `device` | sounddevice name/id | `default` | PipeWire/PortAudio capture source. Verify with `python -m sounddevice`. |
+| `device` | sounddevice name or index | `default` | PipeWire/PortAudio capture source. Verify with `python -m sounddevice`. A name (or part of one) is matched as text; an unquoted integer of 0 or more selects that device number. Quote a name that looks like a number (`device: "3"`). |
 | `audio_reconnect_s` | seconds | `2.0` | Retry delay when PipeWire or the capture device is temporarily unavailable. Echo stays alive and keeps heartbeating. |
 | `waveform_samples` | integer | `160` | UI scope sample count. Changing it changes shared-memory shape; reboot/clear stale segment. |
 | `waveform_key` | Synapse key | `/audio/waveform` | Shared-state destination consumed by Ember UI. Change both together. |

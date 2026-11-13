@@ -255,6 +255,8 @@ def validate_echo(cfg: Mapping[str, Any]) -> None:
         device = cfg["device"]
         if isinstance(device, bool) or not isinstance(device, (str, int)) or (isinstance(device, str) and not device.strip()):
             _fail(component, "device", "must be a sounddevice name or numeric id", device)
+        if isinstance(device, int) and device < 0:
+            _fail(component, "device", "must be a sounddevice name or a numeric id of 0 or more", device)
 
 
 FOXFIRE_KEYS = {

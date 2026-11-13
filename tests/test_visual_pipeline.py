@@ -53,6 +53,52 @@ class EchoTests(unittest.TestCase):
         stereo = np.array([[1.0, -1.0], [0.5, 0.5]], dtype=np.float32)
         self.assertEqual(echo.mix_to_mono(stereo).tolist(), [0.0, 0.5])
 
+    def test_numeric_device_id_stays_an_index_and_names_stay_text(self):
+        self.assertEqual(echo.stream_device(3), 3)
+        self.assertIsInstance(echo.stream_device(0), int)
+        self.assertEqual(echo.stream_device("default"), "default")
+        self.assertEqual(echo.stream_device("USB Audio"), "USB Audio")
+        self.assertEqual(echo.stream_device("3"), "3", "a quoted YAML value is still a name")
+
+    def opened_device(self, device_yaml):
+        """Run Echo's main loop until it opens its capture stream; return ``device=``."""
+        class Opened(BaseException):
+            pass
+
+        seen = []
+
+        def input_stream(**kwargs):
+            seen.append(kwargs["device"])
+            raise Opened()
+
+        use_bus(self, echo)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "echo.yaml")
+            path.write_text(f"device: {device_yaml}\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"CONFIG_PATH": str(path)}), \
+                    mock.patch.object(echo.sd, "InputStream", input_stream, create=True), \
+                    mock.patch.object(echo.signal, "signal"), capture_whisper(), \
+                    mock.patch("builtins.print"):
+                with self.assertRaises(Opened):
+                    echo.main()
+        return seen[0]
+
+    @unittest.skipUnless(has_module("yaml"), "PyYAML is required to load worker YAML")
+    def test_capture_stream_is_opened_with_the_configured_device(self):
+        self.assertEqual(self.opened_device("3"), 3)
+        self.assertIsInstance(self.opened_device("3"), int)
+        self.assertEqual(self.opened_device("default"), "default")
+        self.assertEqual(self.opened_device("'hw:CARD=Loopback'"), "hw:CARD=Loopback")
+
+    def test_invalid_device_values_are_rejected(self):
+        defaults = dict(echo.DEFAULTS)
+        for bad in (True, -1, 2.5, "", "  ", ["default"], None):
+            with self.subTest(device=bad):
+                with self.assertRaisesRegex(runtime_config.ConfigError, "echo: device"):
+                    runtime_config.validate_echo(dict(defaults, device=bad))
+        for good in (0, 3, "default", "USB Audio"):
+            runtime_config.validate_echo(dict(defaults, device=good))
+
     @unittest.skipUnless(has_module("yaml"), "PyYAML is required to load worker YAML")
     def test_invalid_yaml_stops_echo_with_a_config_error(self):
         with tempfile.TemporaryDirectory() as tmp:

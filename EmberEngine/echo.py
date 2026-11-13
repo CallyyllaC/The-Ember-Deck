@@ -63,6 +63,18 @@ def load_cfg() -> dict[str, Any]:
     return out
 
 
+def stream_device(value: Any) -> int | str:
+    """Return ``device`` in the form sounddevice expects.
+
+    sounddevice selects by index for an int and by (sub)string of the name
+    for a str, so a numeric id must stay an int: ``str(3)`` would look for a
+    device whose name contains "3". Names, including ``default``, stay text.
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return str(value)
+
+
 def decimate_waveform(samples: np.ndarray, output_samples: int) -> np.ndarray:
     """Return a small evenly-spaced time-domain window for the UI scope."""
     count = max(16, int(output_samples))
@@ -105,7 +117,7 @@ def main() -> None:
             f"native={native_bins}, fft_size={fftn}",
             flush=True,)
             bins = native_bins
-    dev: str = str(cfg["device"])
+    dev = stream_device(cfg["device"])
     proc: str = str(cfg["proc_name"])
     waveform_samples = int(cfg.get("waveform_samples", 160))
     waveform_key = str(cfg.get("waveform_key", "/audio/waveform"))
