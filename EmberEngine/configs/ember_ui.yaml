@@ -20,10 +20,13 @@ art_dead_grace_s: 2.0
 scope_refresh_hz: 50
 system_refresh_s: 2.0
 log_refresh_s: 1.0
-# Horizontal marquee step for long Wi-Fi/IP values in the console diagnostics panel.
+# Horizontal marquee step for long Wi-Fi/IP values in the console status band.
 diagnostics_scroll_step_s: 0.35
 log_path: logs/foundry.log
 structured_log_path: logs/foundry.structured.jsonl
 structured_log_required: true
 waveform_key: /audio/waveform
 waveform_samples: 160
+# Draw the current lyric line as large dot-matrix capitals when it fits the
+# lyric band; long lines and text the dot font lacks (CJK, emoji) stay normal.
+large_lyrics: true

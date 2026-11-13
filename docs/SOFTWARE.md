@@ -107,7 +107,7 @@ For physical controls, Pawprint also publishes quiet diagnostic counters under `
 
 ## Diagnostic tools
 
-- `ember_ui.py` displays media, system state and structured logs.
+- `ember_ui.py` displays media, system state and structured logs. `dot_matrix.py` draws its large lyric line as Braille-dot capitals.
 - `ember_ui_probe.py` checks the data consumed by that UI.
 - `album_art_probe.py` exercises media and artwork presentation.
 - `lyrics_probe.py` inspects lyrics-related Plex streams.

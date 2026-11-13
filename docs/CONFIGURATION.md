@@ -257,7 +257,7 @@ The REC hold cycles PLEX → RADIO → YOUTUBE → PLEX. A guest app that cannot
 | Option | Type / units | Current | Purpose |
 |:--|:--|:--|:--|
 | `proc_name` | string | `ember_ui` | UI identity. The UI is a separate systemd service, not a Foundry worker. |
-| `logical_width`, `logical_height` | terminal cells | `80`, `60` | Design canvas used by the adaptive layout. |
+| `logical_width`, `logical_height` | terminal cells | `80`, `60` | Validated but not used for placement: the layout follows the live terminal grid (see below). |
 | `safe_margin_cells` | cells | `1` | Bezel-safe inset. |
 | `update_hz` | Hz | `50` | Scheduler rate; hidden pages remain throttled. |
 | `metadata_refresh_hz` | Hz | `5` | Active media/lyrics sampling. |
@@ -266,10 +266,13 @@ The REC hold cycles PLEX → RADIO → YOUTUBE → PLEX. A guest app that cannot
 | `metadata_dead_grace_s`, `art_dead_grace_s` | seconds | `2`, `2` | Retain last metadata/art across brief source gaps. |
 | `ui_brightness_floor`, `ui_brightness_ceiling` | ratio 0–1 | `0.52`, `1.0` | Colour scaling from Pawprint brightness; monitor backlight/art are unaffected. |
 | `diagnostics_scroll_step_s` | seconds | `0.35` | Marquee step for long Wi-Fi/IP text. |
+| `large_lyrics` | boolean | `true` | Draw the current lyric line as large dot-matrix capitals, about two and a half times the height of normal text. Used only where the lyric band holds about 48 large characters (on an 80 × 30 grid, not on 60 × 22), so lines do not switch size one after another. A line that is too long, or has characters the dot font lacks (CJK, emoji), is shown as normal text. Needs Braille glyphs in the terminal font; DejaVu Sans Mono has them. |
 | `log_path` | path | `logs/foundry.log` | Legacy plain log fallback, relative to EmberEngine. |
 | `structured_log_path` | path | `logs/foundry.structured.jsonl` | Whisper's bounded UI snapshot. |
 | `structured_log_required` | boolean | `true` | If true, do not silently replace missing structured logs with legacy text. |
 | `waveform_key`, `waveform_samples` | Synapse key/count | `/audio/waveform`, `160` | Must match Echo; changing count requires shared-memory cleanup/reboot. |
+
+**Text size.** The panel's text size is the font size of the `emberdeck` LXTerminal profile, not an option here. The UI lays itself out for whatever grid of cells that font produces, from about 56 × 20 up to 80 × 60, so a bigger font simply means fewer, larger cells: going from 80 × 30 to 60 × 22 makes text about a third larger. Run `stty size` in that profile to see the current grid (rows, then columns).
 
 Several lower-frequency page rates (`global_refresh_hz`, `now_refresh_hz`, `info_refresh_hz`, `console_refresh_hz`, `palette_refresh_hz`) are supported by the UI with defaults `2`, `2`, `1`, `2`, and `2` Hz. Add them only when tuning is needed.
 

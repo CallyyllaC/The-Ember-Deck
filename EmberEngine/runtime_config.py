@@ -425,7 +425,7 @@ EMBER_UI_KEYS = {
     "console_refresh_hz", "palette_refresh_hz", "ui_brightness_floor", "ui_brightness_ceiling",
     "system_refresh_s", "log_refresh_s", "log_path", "structured_log_path",
     "structured_log_required", "metadata_dead_grace_s", "art_dead_grace_s", "waveform_key",
-    "waveform_samples", "safe_margin_cells", "diagnostics_scroll_step_s",
+    "waveform_samples", "safe_margin_cells", "diagnostics_scroll_step_s", "large_lyrics",
 }
 
 
@@ -435,7 +435,7 @@ def validate_ember_ui(cfg: Mapping[str, Any]) -> None:
     _known(component, cfg, EMBER_UI_KEYS)
     _texts(component, cfg, ("proc_name", "log_path", "structured_log_path"))
     _bus_keys(component, cfg, ("waveform_key",))
-    _booleans(component, cfg, ("structured_log_required",))
+    _booleans(component, cfg, ("structured_log_required", "large_lyrics"))
     _numbers(component, cfg, ("logical_width", "logical_height", "waveform_samples"), minimum=16, integer=True)
     _numbers(component, cfg, ("safe_margin_cells",), minimum=0, integer=True)
     _numbers(component, cfg, (

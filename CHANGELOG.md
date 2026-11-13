@@ -2,11 +2,18 @@
 
 ## Unreleased
 
+### Added
+- Large lyrics: on Now Playing and Scope, the current lyric line is drawn as dot-matrix capitals about two and a half times the height of normal text, with the previous and next lines around it. Lines too long for the lyric band, and text the dot font cannot draw (CJK, emoji), stay normal text. Set `large_lyrics: false` in `ember_ui.yaml` to turn it off.
+
 ### Changed
 - Pawprint's virtual uinput media-key device is off by default (`media_keys_enabled: false`). The tape transport keys always go directly to Plex, Bluetooth or the local MPRIS player, so nothing ever reached the device; with it on and the uinput rule missing, Pawprint logged a setup error every `media_reconnect_s`. The uinput module and udev rule are now an optional install step. An installed rule does no harm and can be left in place.
+- The panel UI's layout now works on any terminal grid from about 56 × 20 cells up to 80 × 60, so the `emberdeck` LXTerminal profile can use a bigger font for readability. Header text is cut short instead of wrapping, panel headings sit in the panel borders, and the Now Playing header shows track number, year, genre and audio format instead of repeating the title, artist, album and progress shown in the panel below it. The console puts heartbeats, host diagnostics and control inputs in one band above a full-width log. Track Info leaves out fields the current source does not report instead of listing N/A.
 - Every worker and the UI now honour `configs/<name>.local.yaml`, not only Minstrel, Rich Presence and the artwork service. Before, `runtime_config.py configs` validated overlays such as `pawprint.local.yaml` or `echo.local.yaml` that the worker then ignored. An existing overlay of this kind now takes effect, so check it with `runtime_config.py configs` before restarting; a malformed one stops the worker with a configuration error (Whisper falls back to its defaults).
 
 ### Fixed
+- The console's log panel no longer hides the newest entries. It clipped from the bottom, so once lines wrapped, the most recent third of the log was cut off. The panel now always ends on the newest line.
+- The console's heartbeat list no longer drops services on a 30-row grid; all seven now show on one line, with an age only for a service that is late.
+- A page now draws its current content as soon as the selector switches to it, instead of briefly showing what it held when it was last visible.
 - A Bluetooth phone or local player reporting an out-of-range position, length or track number no longer stops Pawprint or the MPRIS bridge (and with them the whole worker group); such values are shown as unknown.
 - The REC-hold source cycle no longer sticks when a guest app (such as Pear) cannot be launched: HDMI-2 returns to Plex and the next hold moves on.
 - Removed README and installation links to an architecture document that is not part of the repository.

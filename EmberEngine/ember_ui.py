@@ -27,6 +27,7 @@ from typing import Deque, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+import dot_matrix
 import synapse as bus
 from spirit_messages import DEFAULT_ROLE_STYLES
 from runtime_config import load_yaml_mapping
@@ -34,7 +35,6 @@ from runtime_config import load_yaml_mapping
 try:
     from rich.cells import cell_len
     from rich.text import Text
-    from rich.markup import escape as markup_escape
     from textual.app import App, ComposeResult
     from textual.containers import Container
     from textual.widget import Widget
@@ -80,6 +80,8 @@ DEFAULTS = {
     "waveform_samples": 160,
     # One terminal cell reserved inside the physical bezel on every edge.
     "safe_margin_cells": 1,
+    # Draw the current lyric line as large dot-matrix capitals when it fits.
+    "large_lyrics": True,
 }
 
 from contracts import (  # noqa: E402
@@ -128,7 +130,7 @@ def load_cfg() -> dict:
 
 @dataclass(frozen=True)
 class Region:
-    """One fixed Textual-cell rectangle in the 80 × 60 Deck canvas."""
+    """One Textual-cell rectangle, relative to its page container."""
 
     x: int
     y: int
@@ -136,43 +138,195 @@ class Region:
     height: int
 
 
-# The layout is deliberately code-owned. Coordinates are Textual cells, not
-# pixels: the terminal itself is configured to occupy the 640 × 480 display.
-HARD_LAYOUTS: Dict[str, Dict[str, Region]] = {
-    "global": {
-        "state": Region(4, 0, 6, 6),
-        "artist": Region(10, 0, 20, 3),
-        "album": Region(10, 3, 20, 3),
-        "title": Region(30, 0, 30, 3),
-        "progress": Region(30, 3, 30, 3),
-        "rating": Region(60, 0, 10, 3),
-        "popularity": Region(60, 3, 10, 3),
-        "time": Region(70, 0, 10, 3),
-        "date": Region(70, 3, 10, 3),
-        "colours": Region(0, 0, 4, 6),
-    },
-    "now": {
-        "metadata": Region(0, 6, 56, 24),
-        "art": Region(56, 6, 24, 24),
-        "lyrics": Region(0, 30, 80, 18),
-        "logging": Region(0, 48, 80, 12),
-    },
-    "scope": {
-        "wave": Region(0, 6, 80, 42),
-        "lyrics": Region(0, 48, 80, 12),
-    },
-    "info": {
-        "identity": Region(0, 6, 50, 29),
-        "character": Region(50, 6, 30, 29),
-        "provenance": Region(0, 35, 50, 25),
-        "format": Region(50, 35, 30, 25),
-    },
-    "console": {
-        "logging": Region(0, 6, 56, 54),
-        "heartbeats": Region(56, 6, 24, 24),
-        "diagnostics": Region(56, 30, 24, 30),
-    },
+# ---- Layout -----------------------------------------------------------------
+# The layout is code-owned and computed from the live terminal grid, which is
+# set by the LXTerminal profile's font size. A bigger font means fewer cells,
+# so every rule below must still hold from about 56 × 20 up to 80 × 60.
+# Coordinates are Textual cells, not pixels.
+
+MIN_VIEWPORT_W = 40
+MIN_VIEWPORT_H = 18
+# Every ".panel" has a round border and one cell of padding left and right.
+PANEL_CHROME_W = 4
+PANEL_CHROME_H = 2
+# Two content rows plus the header's bottom rule, on every grid size.
+HEADER_H = 3
+HEADER_COLOURS_W = 2
+HEADER_STATE_W = 7
+HEADER_CLOCK_W = 7
+# The Now Playing text keeps at least this much width before the cover grows.
+NOW_METADATA_MIN_W = 34
+# Below this inner width the cover is too small to read and is hidden.
+ART_MIN_INNER_W = 8
+# Previous, current and next lyric line inside a bordered panel.
+LYRICS_MIN_H = 3 + PANEL_CHROME_H
+# Large lyrics are used only where the band holds two or more dot-matrix
+# lines (two rows each) and about 48 large characters in all. A smaller band
+# would fit only short lines, so the text would flip size from line to line.
+LARGE_LYRIC_MIN_ROWS = 4
+LARGE_LYRIC_MIN_CHARS = 48
+CONSOLE_STATUS_DEFAULT_LINES = 3
+
+PAGES = ("now", "scope", "info", "console")
+PAGE_WIDGETS: Dict[str, Tuple[str, ...]] = {
+    "now": ("now-metadata", "now-art", "now-lyrics"),
+    "scope": ("scope-wave", "scope-lyrics"),
+    "info": ("info-identity", "info-character", "info-provenance", "info-format"),
+    "console": ("console-status", "console-logging"),
 }
+HEARTBEAT_SERVICES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("I/O", ("pawprint",)),
+    ("AUDIO", ("echo",)),
+    ("PLAYER", ("minstrel", "mpris_bridge")),
+    ("HDMI-2", ("hdmi2_source_controller",)),
+    ("LED", ("foxfire", "willo_wisp")),
+    ("COLOUR", ("aurora",)),
+    ("BUS", ("whisper_daemon",)),
+)
+HEALTH_STYLES = {"ok": "bold #6fcf6f", "late": "bold #e0a040", "dead": "bold #e85050"}
+PANEL_TITLES = {
+    "now-metadata": "NOW PLAYING",
+    "now-lyrics": "LYRICS",
+    "info-identity": "IDENTITY",
+    "info-character": "MUSICAL CHARACTER",
+    "info-provenance": "PROVENANCE",
+    "info-format": "FORMAT + LEVEL",
+    "console-status": "SYSTEM",
+    "console-logging": "FOUNDRY LOG",
+}
+HEADER_WIDGETS = (
+    "global-colours", "global-state", "global-artist", "global-album",
+    "global-title", "global-progress", "global-time", "global-date",
+)
+
+
+@dataclass(frozen=True)
+class Layout:
+    """Every widget rectangle for one terminal size and visible page.
+
+    Header regions are relative to ``#global-root`` and page regions to their
+    ``#page-*`` container; both containers sit at ``(safe, safe)``. A region
+    of ``None`` means the widget is hidden at this size or on this page.
+    """
+
+    viewport_w: int
+    viewport_h: int
+    safe: int
+    width: int
+    height: int
+    page: str
+    regions: Dict[str, Optional[Region]]
+
+    def inner(self, widget_id: str) -> Tuple[int, int]:
+        """Text area of a bordered, padded panel: (columns, rows)."""
+        region = self.regions.get(widget_id)
+        if region is None:
+            return (0, 0)
+        return (max(1, region.width - PANEL_CHROME_W), max(1, region.height - PANEL_CHROME_H))
+
+    def span(self, widget_id: str) -> int:
+        """Width of an unbordered header widget, or 0 when it is hidden."""
+        region = self.regions.get(widget_id)
+        return region.width if region is not None else 0
+
+
+def compute_layout(
+    viewport_w: int,
+    viewport_h: int,
+    safe_margin: int = 1,
+    page: str = "now",
+    console_status_lines: int = CONSOLE_STATUS_DEFAULT_LINES,
+) -> Layout:
+    """Fit the header and all four pages into a terminal grid.
+
+    The physical case steals a little of the view at some angles, so content
+    lives inside a bezel-safe inset. The header always uses two text rows and
+    never wraps; the pages share what is left.
+    """
+    viewport_w = max(MIN_VIEWPORT_W, int(viewport_w))
+    viewport_h = max(MIN_VIEWPORT_H, int(viewport_h))
+    safe = min(
+        max(0, int(safe_margin)),
+        (viewport_w - MIN_VIEWPORT_W) // 2,
+        (viewport_h - MIN_VIEWPORT_H) // 2,
+    )
+    width = viewport_w - safe * 2
+    height = viewport_h - safe * 2
+    regions: Dict[str, Optional[Region]] = {}
+
+    # ---- Header: colour ticks | state | text | clock, two single-line rows.
+    middle_x = HEADER_COLOURS_W + HEADER_STATE_W
+    middle_w = width - middle_x - HEADER_CLOCK_W
+    clock_x = width - HEADER_CLOCK_W
+    regions["global-colours"] = Region(0, 0, HEADER_COLOURS_W, 2)
+    regions["global-state"] = Region(HEADER_COLOURS_W, 0, HEADER_STATE_W, 2)
+    regions["global-time"] = Region(clock_x, 0, HEADER_CLOCK_W, 1)
+    regions["global-date"] = Region(clock_x, 1, HEADER_CLOCK_W, 1)
+    if page == "now":
+        # The Now Playing panel already shows title, artist, album and
+        # progress in larger space, so here the header carries track context.
+        regions["global-artist"] = Region(middle_x, 0, middle_w - 1, 1)
+        regions["global-album"] = Region(middle_x, 1, middle_w - 1, 1)
+        regions["global-title"] = None
+        regions["global-progress"] = None
+    else:
+        artist_w = max(10, middle_w * 2 // 5)
+        title_x = middle_x + artist_w
+        title_w = middle_w - artist_w - 1
+        regions["global-artist"] = Region(middle_x, 0, artist_w - 1, 1)
+        regions["global-album"] = Region(middle_x, 1, artist_w - 1, 1)
+        regions["global-title"] = Region(title_x, 0, title_w, 1)
+        regions["global-progress"] = Region(title_x, 1, title_w, 1)
+
+    body_y = HEADER_H
+    body_h = height - HEADER_H
+
+    # ---- Now Playing: text and a square cover above a lyric band.
+    # About a third of the page, so large lyrics get two dot-matrix lines
+    # with the neighbouring lines around them on an 80 × 30 grid.
+    lyrics_h = max(LYRICS_MIN_H, min(body_h - 8, round(body_h * 0.36)))
+    top_h = body_h - lyrics_h
+    # Half-block art: one cell is one pixel wide and two pixels tall, so a
+    # square cover needs twice as many columns as rows.
+    art_inner_h = top_h - PANEL_CHROME_H
+    art_inner_w = art_inner_h * 2
+    max_art_inner_w = width - min(NOW_METADATA_MIN_W, width // 2) - PANEL_CHROME_W
+    if art_inner_w > max_art_inner_w:
+        art_inner_w = max_art_inner_w - (max_art_inner_w % 2)
+        art_inner_h = art_inner_w // 2
+    if art_inner_w >= ART_MIN_INNER_W:
+        art_w = art_inner_w + PANEL_CHROME_W
+        art_h = art_inner_h + PANEL_CHROME_H
+        regions["now-art"] = Region(width - art_w, body_y + (top_h - art_h) // 2, art_w, art_h)
+    else:
+        art_w = 0
+        regions["now-art"] = None
+    regions["now-metadata"] = Region(0, body_y, width - art_w, top_h)
+    regions["now-lyrics"] = Region(0, body_y + top_h, width, lyrics_h)
+
+    # ---- Scope: waveform above the same lyric band.
+    scope_lyrics_h = max(LYRICS_MIN_H, min(body_h - 6, round(body_h * 0.3)))
+    regions["scope-wave"] = Region(0, body_y, width, body_h - scope_lyrics_h)
+    regions["scope-lyrics"] = Region(0, body_y + body_h - scope_lyrics_h, width, scope_lyrics_h)
+
+    # ---- Track Info: identity and character on top, the longer lists below.
+    left_w = width * 11 // 20
+    right_w = width - left_w
+    top_info_h = max(5, min(8, body_h - 7))
+    bottom_info_h = body_h - top_info_h
+    regions["info-identity"] = Region(0, body_y, left_w, top_info_h)
+    regions["info-character"] = Region(left_w, body_y, right_w, top_info_h)
+    regions["info-provenance"] = Region(0, body_y + top_info_h, left_w, bottom_info_h)
+    regions["info-format"] = Region(left_w, body_y + top_info_h, right_w, bottom_info_h)
+
+    # ---- Console: a compact status band, then the log at full width. The
+    # log always keeps at least four rows; extra status rows are clipped.
+    status_lines = max(1, min(int(console_status_lines), body_h - PANEL_CHROME_H * 2 - 4))
+    status_h = status_lines + PANEL_CHROME_H
+    regions["console-status"] = Region(0, body_y, width, status_h)
+    regions["console-logging"] = Region(0, body_y + status_h, width, body_h - status_h)
+
+    return Layout(viewport_w, viewport_h, safe, width, height, page, regions)
 
 # Physical selector navigation. Pawprint publishes source_selector = 1 for
 # the UI position, and visualiser_mode = 1..4 left-to-right.
@@ -188,15 +342,6 @@ def _n_a(value: object) -> str:
     """Return display text, substituting N/A for empty values."""
     text = str(value or "").strip()
     return text if text else "N/A"
-
-
-def safe_markup(value: object) -> str:
-    """Escape external metadata/log text before Rich renders it as markup.
-
-    This matters for square brackets in titles and lyrics, and keeps arbitrary
-    Unicode metadata as text rather than accidental Rich tags.
-    """
-    return markup_escape(_n_a(value))
 
 
 def read_utf8(key: str, length: int = TEXT_BUFFER) -> str:
@@ -250,7 +395,7 @@ DISCORD_STATUS_TEXT = {
 
 
 def discord_status_lines() -> List[str]:
-    """Rich Presence status for the console diagnostics panel (plain text, no markup).
+    """Rich Presence status for the console status band (plain text, no markup).
 
     Returns nothing when the Rich Presence worker has never published, so the
     panel is unchanged on a Deck without it. Discord's own authorization page
@@ -280,48 +425,6 @@ def read_lyric_context_utf8() -> Tuple[str, str, str]:
 def read_lyric_utf8() -> str:
     """Compatibility helper for older callers that only need the active line."""
     return read_lyric_context_utf8()[1]
-
-def wrap_terminal_cells(value: object, width: int, max_lines: int) -> str:
-    """Wrap at terminal-cell boundaries, including CJK double-width glyphs.
-
-    Rich is Unicode-aware, but pre-wrapping here means the lyric widget never
-    tries to clip a Japanese/Korean/CJK line mid-glyph while the panel is small.
-    It also keeps narrow terminal grids predictable.
-    """
-    text = _n_a(value)
-    if text == "N/A":
-        return text
-    width = max(2, int(width))
-    max_lines = max(1, int(max_lines))
-    lines: List[str] = []
-
-    for source_line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-        if not source_line:
-            lines.append("")
-            continue
-        current: List[str] = []
-        used = 0
-        for char in source_line:
-            char_width = max(0, cell_len(char))
-            if char_width and used + char_width > width and current:
-                lines.append("".join(current).rstrip())
-                current = []
-                used = 0
-            current.append(char)
-            used += char_width
-        if current or not lines:
-            lines.append("".join(current).rstrip())
-
-    if len(lines) <= max_lines:
-        return "\n".join(lines)
-
-    visible = lines[:max_lines]
-    tail = visible[-1]
-    while tail and cell_len(tail + "…") > width:
-        tail = tail[:-1]
-    visible[-1] = (tail.rstrip() + "…") if tail else "…"
-    return "\n".join(visible)
-
 
 def truncate_terminal_cells(value: object, width: int) -> str:
     """Return one terminal-cell-safe lyric line, with an ellipsis when needed."""
@@ -372,6 +475,155 @@ def marquee_terminal_cells(text: object, width: int, *, now: float, step_s: floa
     return "".join(out).rstrip() or value[:1]
 
 
+def wrap_offsets(plain: str, width: int) -> List[int]:
+    """Line-break offsets for ``plain`` at ``width`` terminal cells.
+
+    Breaks after spaces where possible and inside a word only when the word is
+    wider than the line (long names, CJK text without spaces). A break always
+    falls after a run of spaces, so wrapped lines never start with one.
+    """
+    width = max(1, int(width))
+    offsets: List[int] = []
+    line_start = 0
+    last_break = 0
+    used = 0
+    for index, char in enumerate(plain):
+        char_width = max(0, cell_len(char))
+        if char == " ":
+            used += char_width
+            last_break = index + 1
+            continue
+        if used + char_width > width and index > line_start:
+            brk = last_break if last_break > line_start else index
+            offsets.append(brk)
+            line_start = brk
+            last_break = brk
+            used = cell_len(plain[brk:index])
+        used += char_width
+    return offsets
+
+
+def wrap_words_cells(value: object, width: int, max_lines: int) -> List[str]:
+    """Word-wrap one line of plain text, ending with an ellipsis if it is cut."""
+    text = _n_a(value)
+    if text == "N/A":
+        return []
+    text = text.replace("\r", "").replace("\n", " ").strip()
+    width = max(2, int(width))
+    bounds = [0, *wrap_offsets(text, width), len(text)]
+    lines = [text[start:end].rstrip() for start, end in zip(bounds, bounds[1:])]
+    if len(lines) > max(1, int(max_lines)):
+        lines = lines[:max(1, int(max_lines))]
+        lines[-1] = truncate_terminal_cells(lines[-1] + "…", width)
+    return lines
+
+
+def wrap_text(text: Text, width: int) -> List[Text]:
+    """Word-wrap a styled Rich Text to ``width`` cells, keeping its styles."""
+    lines = text.divide(wrap_offsets(text.plain, width)) if text.plain else [text]
+    for line in lines:
+        line.rstrip()
+    return list(lines)
+
+
+def tail_wrapped_lines(entries: Sequence[Text], width: int, rows: int) -> List[Text]:
+    """The newest log entries that fit ``rows`` once wrapped, oldest first.
+
+    Clipping from the bottom would hide the most recent lines, so the tail is
+    chosen here. Only whole entries are shown, except that a single entry
+    taller than the panel shows its end.
+    """
+    rows = max(1, int(rows))
+    shown: List[Text] = []
+    for entry in reversed(entries):
+        wrapped = wrap_text(entry, width)
+        if len(shown) + len(wrapped) > rows:
+            if not shown:
+                shown = wrapped[-rows:]
+            break
+        shown = wrapped + shown
+    return shown
+
+
+def pack_tokens(tokens: Sequence[Text], width: int, gap: Optional[int] = None) -> List[Text]:
+    """Lay short status tokens out left to right, starting a new row as needed.
+
+    Without an explicit ``gap``, use the widest spacing (three cells down to
+    one) that still needs no more rows than the tightest packing.
+    """
+    if gap is None:
+        candidates = [pack_tokens(tokens, width, spacing) for spacing in (3, 2, 1)]
+        fewest = min(len(rows) for rows in candidates)
+        return next(rows for rows in candidates if len(rows) == fewest)
+    width = max(1, int(width))
+    rows: List[Text] = []
+    current: Optional[Text] = None
+    for token in tokens:
+        token = token.copy()
+        token.truncate(width, overflow="ellipsis")
+        if current is not None and current.cell_len + gap + token.cell_len <= width:
+            current.append(" " * gap)
+            current.append_text(token)
+        else:
+            current = token
+            rows.append(current)
+    return rows
+
+
+def fit_line(text: Text, width: int) -> Text:
+    """One header/panel row: never wraps, ends with an ellipsis when cut."""
+    fitted = text.copy()
+    fitted.truncate(max(1, int(width)), overflow="ellipsis")
+    return fitted
+
+
+def known(value: object) -> bool:
+    """True for a real metadata value: not empty, zero, N/A or an unset clock."""
+    return _n_a(value) not in ("N/A", "--:--")
+
+
+def known_join(parts: Sequence[object], separator: str = " · ") -> str:
+    """Join only the parts a source actually reported."""
+    return separator.join(_n_a(part) for part in parts if known(part))
+
+
+def track_label(number: object, count: object, prefix: str = "TRACK ") -> str:
+    """Return "TRACK 3/12", "TRACK 3" or nothing, depending on what is known."""
+    if not known(number):
+        return ""
+    return f"{prefix}{number}/{count}" if known(count) else f"{prefix}{number}"
+
+
+def bit_depth_label(value: object) -> str:
+    """Plex reports a bare bit depth such as "16"; show it as "16-bit"."""
+    text = _n_a(value)
+    return f"{text}-bit" if text.isdigit() else (text if known(text) else "")
+
+
+def key_value_block(
+    heading: Sequence[object],
+    rows: Sequence[Tuple[str, object]],
+    width: int,
+    height: int,
+) -> Text:
+    """A heading of bold lines, then aligned label/value rows, cut to fit.
+
+    Rows the source did not report are skipped, so on Bluetooth or MPRIS the
+    panels show what is known instead of a column of N/A. Nothing wraps:
+    each row is one line, cut with an ellipsis.
+    """
+    lines = [fit_line(Text(_n_a(value), style="bold"), width) for value in heading if known(value)]
+    present = [(label, _n_a(value)) for label, value in rows if known(value)]
+    label_w = max((len(label) for label, _ in present), default=0)
+    for label, value in present:
+        line = Text(f"{label:<{label_w}} ", style="dim")
+        line.append(value)
+        lines.append(fit_line(line, width))
+    if not lines:
+        lines.append(Text("Not reported by this source", style="dim"))
+    return Text("\n").join(lines[:max(1, int(height))])
+
+
 DEFAULT_TEXT_PALETTE: Tuple[Tuple[int, int, int], ...] = (
     (118, 83, 75),   # dominant
     (212, 122, 58),  # accent
@@ -389,32 +641,56 @@ def _text_palette_roles(
     return tuple(roles)
 
 
+def large_lyrics_fit(width: int, height: int) -> bool:
+    """Whether a lyric band of this text area should use large lyrics at all."""
+    lines = int(height) // 2
+    chars_per_line = int(width) * 2 // dot_matrix.TYPICAL_ADVANCE
+    return int(height) >= LARGE_LYRIC_MIN_ROWS and lines * chars_per_line >= LARGE_LYRIC_MIN_CHARS
+
+
 def lyric_context_widget(
     context: Tuple[str, str, str],
     width: int,
     height: int,
     colours: Sequence[Tuple[int, int, int]] = DEFAULT_TEXT_PALETTE,
+    large: bool = False,
 ) -> Text:
     """Render a controlled previous/current/next lyric stanza.
 
     The current timed line is visually dominant. Neighbours remain present as
     dim context, but each is constrained to one terminal row so CJK or long
     English lines cannot turn the Now Playing page into a scrolling paragraph.
+
+    ``width`` and ``height`` are the panel's text area. With ``large``, the
+    current line is drawn as dot-matrix capitals when the band has room for
+    at least two large lines and the line fits; otherwise, and for text the
+    dot font cannot draw (CJK, emoji), it falls back to normal text, which
+    may take a second row. The block is centred vertically so a tall panel
+    does not leave the lyrics stranded at the top.
     """
     previous, current, next_line = context
-    usable_width = max(4, int(width) - 4)  # panel border + horizontal padding
-    show_heading = int(height) >= 6
-    dominant, accent, _dark, light = _text_palette_roles(colours)
-    rendered = Text()
-    if show_heading:
-        rendered.append("LYRICS\n", style=f"bold {rgb_style(accent)}")
+    width = max(4, int(width))
+    height = max(1, int(height))
+    dominant, _accent, _dark, light = _text_palette_roles(colours)
 
-    previous_text = truncate_terminal_cells(previous, usable_width) or " "
-    current_text = truncate_terminal_cells(current, usable_width) or "—"
-    next_text = truncate_terminal_cells(next_line, usable_width) or " "
-    rendered.append(previous_text + "\n", style=rgb_style(dominant))
-    rendered.append(current_text + "\n", style=f"bold {rgb_style(light)}")
-    rendered.append(next_text, style=rgb_style(dominant))
+    current_rows: List[str] = []
+    if large and large_lyrics_fit(width, height) and known(current):
+        drawn = dot_matrix.render_lines(current, width, height // 2)
+        if drawn:
+            current_rows = [row for pair in drawn for row in pair]
+    if not current_rows:
+        current_rows = wrap_words_cells(current, width, 2 if height >= 4 else 1) or ["—"]
+    rows: List[Tuple[str, str]] = [(line, f"bold {rgb_style(light)}") for line in current_rows]
+    if height >= len(rows) + 2:
+        rows.insert(0, (truncate_terminal_cells(previous, width), rgb_style(dominant)))
+        rows.append((truncate_terminal_cells(next_line, width), rgb_style(dominant)))
+    rows = rows[:height]
+
+    rendered = Text("\n" * ((height - len(rows)) // 2))
+    for index, (line, style) in enumerate(rows):
+        rendered.append(line or " ", style=style)
+        if index != len(rows) - 1:
+            rendered.append("\n")
     return rendered
 
 
@@ -435,14 +711,6 @@ def fmt_time(seconds: float) -> str:
     minutes, secs = divmod(total, 60)
     hours, minutes = divmod(minutes, 60)
     return f"{hours:d}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:d}:{secs:02d}"
-
-
-def progress_bar(position: float, duration: float, width: int) -> str:
-    """Build a fixed-width textual playback progress bar."""
-    width = max(6, int(width))
-    fraction = clamp01(position / duration) if duration > 0 else 0.0
-    filled = int(round(fraction * width))
-    return "█" * filled + "░" * (width - filled)
 
 
 def palette_progress_bar(
@@ -1144,7 +1412,15 @@ class EmberUI(App[None]):
         overflow: hidden hidden;
         padding: 0 1;
     }
-    .panel { border: round #6e2d20; background: #120607; }
+    .panel {
+        border: round #6e2d20;
+        background: #120607;
+        /* Panel headings live in the border, so they cost no text rows. */
+        border-title-align: left;
+        border-title-style: bold;
+        border-title-color: #e8c9a4;
+    }
+    #global-time, #global-date { text-align: right; }
     #safe-frame {
         position: absolute;
         offset: 0 0;
@@ -1208,6 +1484,8 @@ class EmberUI(App[None]):
         self._dead_art_seq: Optional[Tuple[int, int]] = None
         self._dead_art_since: Optional[float] = None
         self._text_cache: Dict[str, str] = {}
+        self._console_status_lines = CONSOLE_STATUS_DEFAULT_LINES
+        self.layout_plan = compute_layout(80, 30, int(cfg.get("safe_margin_cells", 1)), self.page)
         log_path = Path(str(cfg["log_path"]))
         if not log_path.is_absolute():
             log_path = BASE / log_path
@@ -1222,18 +1500,10 @@ class EmberUI(App[None]):
         """Return the compose result."""
         yield Static(id="safe-frame")
 
-        # Global overlay. Geometry is fixed in HARD_LAYOUTS above.
+        # Global overlay. Geometry comes from compute_layout().
         with Container(id="global-root"):
-            yield Static(id="global-colours")
-            yield Static(id="global-state")
-            yield Static(id="global-artist")
-            yield Static(id="global-album")
-            yield Static(id="global-title")
-            yield Static(id="global-rating")
-            yield Static(id="global-popularity")
-            yield Static(id="global-progress")
-            yield Static(id="global-time")
-            yield Static(id="global-date")
+            for widget_id in HEADER_WIDGETS:
+                yield Static(id=widget_id)
 
         with Container(id="page-now"):
             yield Static(id="now-metadata", classes="region panel")
@@ -1251,14 +1521,13 @@ class EmberUI(App[None]):
             yield Static(id="info-format", classes="region panel")
 
         with Container(id="page-console"):
+            yield Static(id="console-status", classes="region panel")
             yield Static(id="console-logging", classes="region panel")
-            yield Static(id="console-heartbeats", classes="region panel")
-            yield Static(id="console-diagnostics", classes="region panel")
-            yield Static(id="console-controls", classes="region panel")
 
     def on_mount(self) -> None:
         """Handle the on mount lifecycle step."""
-        self._apply_adaptive_layout()
+        for widget_id, title in PANEL_TITLES.items():
+            self.query_one(f"#{widget_id}").border_title = title
         self._set_page("now")
         interval = 1.0 / max(2, int(self.cfg.get("update_hz", 20)))
         self.set_interval(interval, self.refresh_frame)
@@ -1325,9 +1594,11 @@ class EmberUI(App[None]):
 
         panel_colour = self._scaled_colour(panel_rgb, surface_level)
         border_colour = self._scaled_colour(border_rgb, level)
+        title_colour = self._scaled_colour(self._mix_colour(text_rgb, accent, 0.35), level)
         for panel in self.query(".panel"):
             panel.styles.background = panel_colour
             panel.styles.border = ("round", border_colour)
+            panel.styles.border_title_color = title_colour
 
         safe_frame = self.query_one("#safe-frame")
         safe_frame.styles.border = (
@@ -1360,137 +1631,39 @@ class EmberUI(App[None]):
         self._place(widget_id, region)
 
     def _apply_adaptive_layout(self) -> None:
-        """Fit the page architecture into the live terminal grid.
+        """Fit the header and pages into the live terminal grid.
 
-        The physical case steals a little of the view at some angles, so all
-        real content lives inside a permanent one-cell bezel-safe frame. The
-        panels then calculate their rectangles from the remaining viewport.
+        Rectangles come from compute_layout(), a pure function, so the same
+        rules can be checked in tests for every likely font size.
         """
-        viewport_w = max(40, int(self.size.width))
-        viewport_h = max(18, int(self.size.height))
-        requested_safe = max(0, int(self.cfg.get("safe_margin_cells", 1)))
-        safe = min(
-            requested_safe,
-            max(0, (viewport_w - 40) // 2),
-            max(0, (viewport_h - 18) // 2),
+        plan = compute_layout(
+            int(self.size.width),
+            int(self.size.height),
+            int(self.cfg.get("safe_margin_cells", 1)),
+            self.page,
+            self._console_status_lines,
         )
-        width = max(40, viewport_w - safe * 2)
-        height = max(18, viewport_h - safe * 2)
+        self.layout_plan = plan
 
         frame = self.query_one("#safe-frame")
         frame.styles.offset = (0, 0)
-        frame.styles.width = viewport_w
-        frame.styles.height = viewport_h
-
-        header_h = 6 if height >= 44 else 5 if height >= 32 else 4
-        body_y = header_h
-        body_h = max(12, height - body_y)
+        frame.styles.width = plan.viewport_w
+        frame.styles.height = plan.viewport_h
 
         # Containers must match their runtime viewport before child placement.
-        for container_id in ("global-root", "page-now", "page-scope", "page-info", "page-console"):
+        for container_id in ("global-root", *(f"page-{page}" for page in PAGES)):
             container = self.query_one(f"#{container_id}")
-            container.styles.offset = (safe, safe)
-            container.styles.width = width
-            container.styles.height = height if container_id != "global-root" else header_h
+            container.styles.offset = (plan.safe, plan.safe)
+            container.styles.width = plan.width
+            container.styles.height = HEADER_H if container_id == "global-root" else plan.height
 
-        # ---- Compact global overlay ----
-        colour_w = 2
-        state_w = min(9, max(7, width // 10))
-        clock_w = 9
-        score_w = 0 if width < 94 else 8
-        right_reserved = clock_w + score_w
-        main_x = colour_w + state_w
-        title_x = main_x + max(16, width // 4)
-        title_w = max(12, width - title_x - right_reserved)
-        artist_w = max(12, title_x - main_x)
+        for widget_id, region in plan.regions.items():
+            self._place_optional(widget_id, region)
 
-        global_regions = {
-            "colours": Region(0, 0, colour_w, header_h),
-            "state": Region(colour_w, 0, state_w, header_h),
-            "artist": Region(main_x, 0, artist_w, max(2, header_h // 2)),
-            "album": Region(main_x, max(2, header_h // 2), artist_w, header_h - max(2, header_h // 2)),
-            "title": Region(title_x, 0, title_w, max(2, header_h // 2)),
-            "progress": Region(title_x, max(2, header_h // 2), title_w, header_h - max(2, header_h // 2)),
-            "time": Region(width - clock_w, 0, clock_w, max(2, header_h // 2)),
-            "date": Region(width - clock_w, max(2, header_h // 2), clock_w, header_h - max(2, header_h // 2)),
-        }
-        for widget_id, region_name in {
-            "global-state": "state",
-            "global-artist": "artist",
-            "global-album": "album",
-            "global-title": "title",
-            "global-progress": "progress",
-            "global-time": "time",
-            "global-date": "date",
-            "global-colours": "colours",
-        }.items():
-            self._place(widget_id, global_regions[region_name])
-
-        if score_w:
-            score_x = width - clock_w - score_w
-            half = max(2, header_h // 2)
-            self._place_optional("global-rating", Region(score_x, 0, score_w, half))
-            self._place_optional("global-popularity", Region(score_x, half, score_w, header_h - half))
-        else:
-            self._place_optional("global-rating", None)
-            self._place_optional("global-popularity", None)
-
-        # ---- Now Playing ----
-        # Keep the calm listening page, but spend less of it on empty lyric box
-        # space and more on the cover. AlbumArtWidget uses half-block glyphs, so
-        # a 2:1 cell rectangle renders roughly square pixel art.
-        top_h = max(12, min(body_h - 5, int(body_h * 0.62)))
-        desired_art_h = max(8, min(top_h, max(12, width // 4)))
-        art_h = min(top_h, desired_art_h)
-        art_w = min(max(14, width - 24), art_h * 2)
-        art_h = max(7, min(top_h, art_w // 2))
-        meta_w = max(22, width - art_w)
-        art_y = body_y + max(0, (top_h - art_h) // 2)
-        lyrics_h = max(5, body_h - top_h)
-        self._place("now-metadata", Region(0, body_y, meta_w, top_h))
-        self._place("now-art", Region(meta_w, art_y, art_w, art_h))
-        self._place("now-lyrics", Region(0, body_y + top_h, width, lyrics_h))
-
-        # ---- Scope ----
-        scope_lyrics_h = max(5, min(body_h - 5, int(body_h * 0.30)))
-        scope_wave_h = max(5, body_h - scope_lyrics_h)
-        self._place("scope-wave", Region(0, body_y, width, scope_wave_h))
-        self._place("scope-lyrics", Region(0, body_y + scope_wave_h, width, scope_lyrics_h))
-
-        # ---- Track Info ----
-        left_w = max(22, int(width * 0.62))
-        right_w = max(18, width - left_w)
-        top_info_h = max(7, int(body_h * 0.47))
-        bottom_info_h = max(7, body_h - top_info_h)
-        self._place("info-identity", Region(0, body_y, left_w, top_info_h))
-        self._place("info-character", Region(left_w, body_y, right_w, top_info_h))
-        self._place("info-provenance", Region(0, body_y + top_info_h, left_w, bottom_info_h))
-        self._place("info-format", Region(left_w, body_y + top_info_h, right_w, bottom_info_h))
-
-        # ---- Console ----
-        console_left_w = max(24, int(width * 0.68))
-        console_right_w = max(16, width - console_left_w)
-        if body_h >= 20:
-            hb_h = max(7, int(body_h * 0.36))
-            diag_h = max(7, int(body_h * 0.33))
-            controls_h = body_h - hb_h - diag_h
-            if controls_h < 6:
-                deficit = 6 - controls_h
-                shrink_hb = min(deficit, max(0, hb_h - 7))
-                hb_h -= shrink_hb
-                deficit -= shrink_hb
-                diag_h -= min(deficit, max(0, diag_h - 7))
-                controls_h = body_h - hb_h - diag_h
-        else:
-            # Only relevant to a very small desktop-test terminal. Keep panels
-            # non-overlapping rather than insisting on the full rich console.
-            hb_h = max(4, body_h // 3)
-            diag_h = max(4, body_h // 3)
-            controls_h = max(4, body_h - hb_h - diag_h)
-        self._place("console-logging", Region(0, body_y, console_left_w, body_h))
-        self._place("console-heartbeats", Region(console_left_w, body_y, console_right_w, hb_h))
-        self._place("console-diagnostics", Region(console_left_w, body_y + hb_h, console_right_w, diag_h))
-        self._place("console-controls", Region(console_left_w, body_y + hb_h + diag_h, console_right_w, controls_h))
+        # Sizes changed, so every cached panel must be drawn again.
+        self._text_cache.clear()
+        self._last_global_at = self._last_now_at = self._last_scope_at = 0.0
+        self._last_info_at = self._last_console_at = 0.0
 
     def on_resize(self, event) -> None:
         # A resize can arrive during the app's initial mount sequence.
@@ -1509,10 +1682,13 @@ class EmberUI(App[None]):
             self._set_page(page)
 
     def _set_page(self, page: str) -> None:
-        """Set page."""
+        """Show one page. The header differs on Now Playing, so lay out again;
+        that also clears the refresh timers, so the page draws immediately
+        instead of showing what it held when it was last visible."""
         self.page = page
-        for candidate in ("now", "scope", "info", "console"):
+        for candidate in PAGES:
             self.query_one(f"#page-{candidate}").styles.display = "block" if candidate == page else "none"
+        self._apply_adaptive_layout()
 
     def on_unmount(self) -> None:
         """Handle the on unmount lifecycle step."""
@@ -1627,69 +1803,62 @@ class EmberUI(App[None]):
         self._text_cache[widget_id] = cache_key
         self.query_one(f"#{widget_id}", Static).update(content)
 
-    def _heartbeats_text(self) -> str:
-        """Return the heartbeats text result."""
+    def _heartbeat_tokens(self) -> List[Text]:
+        """One token per service group; an age appears only once it is late."""
         now_ms = bus.monotonic_ms()
-        services = [
-            ("I/O", ["pawprint"]),
-            ("AUDIO", ["echo"]),
-            ("PLAYER", ["minstrel", "mpris_bridge"]),
-            ("HDMI-2", ["hdmi2_source_controller"]),
-            ("LED", ["foxfire", "willo_wisp"]),
-            ("COLOUR", ["aurora"]),
-            ("BUS", ["whisper_daemon"]),
-        ]
-
-        rows = []
-        for label, names in services:
+        tokens: List[Text] = []
+        for label, names in HEARTBEAT_SERVICES:
             ages = []
             for name in names:
                 stamp = bus.get_int(f"/proc/{name}/heartbeat_ms", 0)
-                ages.append(bus.elapsed_ms(now_ms, stamp) / 1000.0 if stamp else 999.0)
+                ages.append(bus.elapsed_ms(now_ms, stamp) / 1000.0 if stamp else math.inf)
             age = max(ages)
-            mark = "●" if age < 3.0 else "◐" if age < 10.0 else "×"
-            rows.append((age, label, mark))
+            token = Text(f"{label} ", style="dim")
+            if age < 3.0:
+                token.append("●", style=HEALTH_STYLES["ok"])
+            elif age < 10.0:
+                token.append(f"◐ {age:.0f}s", style=HEALTH_STYLES["late"])
+            elif math.isfinite(age):
+                token.append(f"× {age:.0f}s", style=HEALTH_STYLES["dead"])
+            else:
+                token.append("×", style=HEALTH_STYLES["dead"])
+            tokens.append(token)
+        return tokens
 
-        rows.sort(key=lambda row: row[0], reverse=True)
-
-        lines = ["[b]HEARTBEATS[/b]"]
-        for age, label, mark in rows:
-            lines.append(f"{label:<8} {mark}  {age:>4.1f}s")
-        return "\n".join(lines)
-
-    def _diagnostics_text(self, width: int = 24) -> str:
-        """Return the diagnostics text result."""
+    def _system_tokens(self) -> List[Text]:
+        """Host diagnostics. Long Wi-Fi/IP values scroll inside a fixed width."""
         s = self.system
-        value_width = max(6, int(width) - 10)
         now = time.monotonic()
         step_s = float(self.cfg.get("diagnostics_scroll_step_s", 0.35))
-        wifi = marquee_terminal_cells(str(s.get("wifi", "N/A")), value_width, now=now, step_s=step_s)
-        ip = marquee_terminal_cells(str(s.get("ip", "N/A")), value_width, now=now, step_s=step_s)
-        return "\n".join([
-            "[b]DIAGNOSTICS[/b]",
-            f"WiFi  : {safe_markup(wifi)}",
-            f"IP    : {safe_markup(ip)}",
-            f"CPU   : {safe_markup(s['cpu'])}%",
-            f"RAM   : {safe_markup(s['ram'])}",
-            f"TEMP  : {safe_markup(s['temp'])}",
-            *(f"{label}: {safe_markup(marquee_terminal_cells(value, value_width, now=now, step_s=step_s))}"
-              for label, _, value in (line.partition(": ") for line in discord_status_lines())),
-        ])
 
-    def _controls_text(self) -> str:
+        def token(label: str, value: object, scroll_w: int = 0) -> Text:
+            text = _n_a(value)
+            if scroll_w:
+                text = marquee_terminal_cells(text, scroll_w, now=now, step_s=step_s)
+            rendered = Text(f"{label} ", style="dim")
+            rendered.append(text)
+            return rendered
+
+        tokens = [
+            token("CPU", f"{s.get('cpu', 'N/A')}%"),
+            token("RAM", s.get("ram")),
+            token("TEMP", s.get("temp")),
+            token("WiFi", s.get("wifi"), 18),
+            token("IP", s.get("ip"), 15),
+        ]
+        for line in discord_status_lines():
+            _label, _, value = line.partition(": ")
+            tokens.append(token("RP", value.strip(), 20))
+        return tokens
+
+    def _control_tokens(self) -> List[Text]:
         """Show Pawprint's mapped semantic controls, not raw ADC voltages."""
-        def value(name: str) -> str:
-            """Return the value result."""
-            raw = bus.get_float(f"/io/in/control/{name}", 0.0)
-            return f"{clamp01(raw):.2f}"
-
-        return "\n".join([
-            "[b]CONTROL INPUTS[/b]",
-            f"BRIGHT: {value('brightness')}",
-            f"GAIN  : {value('gain')}",
-            f"COLOUR: {value('colour')}",
-            f"SAT   : {value('saturation')}",
-        ])
+        tokens = []
+        for label, name in (("BRIGHT", "brightness"), ("GAIN", "gain"), ("COLOUR", "colour"), ("SAT", "saturation")):
+            token = Text(f"{label} ", style="dim")
+            token.append(f"{clamp01(bus.get_float(f'/io/in/control/{name}', 0.0)):.2f}")
+            tokens.append(token)
+        return tokens
 
     def refresh_frame(self) -> None:
         """Refresh frame."""
@@ -1725,33 +1894,62 @@ class EmberUI(App[None]):
                 self._update_console()
 
     def _update_global(self, meta: dict, source: int, play_state: int, colours: Sequence[Tuple[int, int, int]]) -> None:
-        """Update global."""
+        """Header: two single-line rows that never wrap at any grid size."""
+        plan = self.layout_plan
         now = datetime.now()
+        _dominant, _accent, _dark, light = _text_palette_roles(colours)
+
+        # Full blocks survive small terminal grids and low-contrast themes
+        # better than single-pixel-looking vertical strokes. Two per row.
         ticks = Text()
-        for colour in colours:
-            # Full blocks survive small terminal grids and low-contrast themes
-            # better than the original single-pixel-looking vertical strokes.
+        for index, colour in enumerate(colours[:4]):
+            if index == 2:
+                ticks.append("\n")
             ticks.append("▌", style=rgb_style(colour))
         self.query_one("#global-colours", Static).update(ticks)
-        self.query_one("#global-state", Static).update(f"[b]{state_name(play_state)}[/b]\n{source_name(source)}")
-        self.query_one("#global-artist", Static).update(f"[b]{safe_markup(meta['artist'])}[/b]")
-        self.query_one("#global-album", Static).update(safe_markup(meta["album"]))
-        self.query_one("#global-title", Static).update(f"[b]{safe_markup(meta['title'])}[/b] [{safe_markup(meta['play_count'])}]")
-        self.query_one("#global-rating", Static).update(f"RATE {safe_markup(meta['rating'])}")
-        self.query_one("#global-popularity", Static).update(f"POP  {safe_markup(meta['popularity'])}")
-        global_progress = self.query_one("#global-progress", Static)
-        global_progress_width = max(12, min(72, global_progress.size.width - 2))
-        progress = palette_progress_bar(
-            meta["position"], meta["duration"], global_progress_width, colours
-        )
-        progress.append("\n")
-        progress.append(
-            f"{fmt_time(meta['position'])} / {fmt_time(meta['duration'])}",
-            style=rgb_style(_text_palette_roles(colours)[3]),
-        )
-        global_progress.update(progress)
-        self.query_one("#global-time", Static).update(now.strftime("[b]%H:%M[/b]\n%a"))
-        self.query_one("#global-date", Static).update(now.strftime("%d %b\n%Y"))
+
+        state_w = plan.span("global-state") - 1
+        state = fit_line(Text(state_name(play_state), style="bold"), state_w)
+        state.append("\n")
+        state.append_text(fit_line(Text(source_name(source)), state_w))
+        self.query_one("#global-state", Static).update(state)
+
+        if self.page == "now":
+            context = known_join([
+                track_label(meta.get("track_number"), meta.get("track_count")),
+                f"DISC {_n_a(meta.get('disc_number'))}" if known(meta.get("disc_number")) else "",
+                meta.get("year"),
+                meta.get("genre"),
+            ])
+            audio = known_join([
+                meta.get("codec"),
+                meta.get("sample_rate"),
+                bit_depth_label(meta.get("bit_depth")),
+                meta.get("bitrate"),
+            ])
+            self.query_one("#global-artist", Static).update(
+                fit_line(Text(context or source_name(source)), plan.span("global-artist")))
+            self.query_one("#global-album", Static).update(
+                fit_line(Text(audio, style="dim"), plan.span("global-album")))
+        else:
+            self.query_one("#global-artist", Static).update(
+                fit_line(Text(_n_a(meta["artist"]), style="bold"), plan.span("global-artist")))
+            self.query_one("#global-album", Static).update(
+                fit_line(Text(_n_a(meta["album"])), plan.span("global-album")))
+            title_w = plan.span("global-title")
+            self.query_one("#global-title", Static).update(
+                fit_line(Text(_n_a(meta["title"]), style=f"bold {rgb_style(light)}"), title_w))
+            clock = f" {fmt_time(meta['position'])}/{fmt_time(meta['duration'])}"
+            bar_w = title_w - cell_len(clock)
+            if bar_w >= 6:
+                progress = palette_progress_bar(meta["position"], meta["duration"], bar_w, colours)
+                progress.append(clock, style=rgb_style(light))
+            else:
+                progress = palette_progress_bar(meta["position"], meta["duration"], title_w, colours)
+            self.query_one("#global-progress", Static).update(progress)
+
+        self.query_one("#global-time", Static).update(Text(now.strftime("%H:%M"), style="bold"))
+        self.query_one("#global-date", Static).update(now.strftime("%d %b"))
 
     def _update_now(
         self,
@@ -1760,30 +1958,49 @@ class EmberUI(App[None]):
         lyric_context: Tuple[str, str, str],
         colours: Sequence[Tuple[int, int, int]],
     ) -> None:
-        """Update now."""
-        lines = [
-            "[b]NOW PLAYING[/b]",
-            safe_markup(meta["title"]),
-            safe_markup(meta["artist"]),
-            safe_markup(meta["album"]),
-            f"{source_name(source)}  •  TRACK {safe_markup(meta['track_number'] or 'N/A')}  •  DISC {safe_markup(meta['disc_number'] or 'N/A')}",
-            "",
-            progress_bar(meta["position"], meta["duration"], max(12, min(64, self.query_one("#now-metadata", Static).size.width - 4))),
-            f"{fmt_time(meta['position'])} / {fmt_time(meta['duration'])}",
-        ]
-        self.query_one("#now-metadata", Static).update("\n".join(lines))
+        """Title, artist, album and progress, centred beside the cover."""
+        plan = self.layout_plan
+        width, height = plan.inner("now-metadata")
+        _dominant, _accent, _dark, light = _text_palette_roles(colours)
+
+        title_rows = wrap_words_cells(meta["title"], width, 2 if height >= 6 else 1) or ["N/A"]
+        lines: List[Text] = [Text(row, style=f"bold {rgb_style(light)}") for row in title_rows]
+        if height >= len(lines) + 4:
+            lines.append(fit_line(Text(_n_a(meta["artist"])), width))
+        if height >= len(lines) + 4:
+            lines.append(fit_line(Text(_n_a(meta["album"])), width))
+        if height >= len(lines) + 3:
+            lines.append(Text(""))
+        lines.append(palette_progress_bar(meta["position"], meta["duration"], width, colours))
+        elapsed = f"{fmt_time(meta['position'])} / {fmt_time(meta['duration'])}"
+        remaining = ""
+        if meta["duration"] and meta["duration"] > meta["position"] >= 0:
+            remaining = f"-{fmt_time(meta['duration'] - meta['position'])}"
+        times = Text(elapsed)
+        if remaining and cell_len(elapsed) + 1 + cell_len(remaining) <= width:
+            times.append(" " * (width - cell_len(elapsed) - cell_len(remaining)))
+            times.append(remaining, style="dim")
+        lines.append(times)
+        lines = lines[-height:]
+        body = Text("\n" * ((height - len(lines)) // 2))
+        body.append_text(Text("\n").join(lines))
+        self.query_one("#now-metadata", Static).update(body)
+
         self.query_one("#now-art", AlbumArtWidget).set_art_context(self._album_art, colours, self._album_art_seq)
-        now_lyrics = self.query_one("#now-lyrics", Static)
-        lyric_key = (
-            f"{lyric_context!r}|{tuple(colours)!r}|"
-            f"{now_lyrics.size.width}|{now_lyrics.size.height}"
-        )
+        self._update_lyrics("now-lyrics", lyric_context, colours)
+
+    def _update_lyrics(
+        self,
+        widget_id: str,
+        lyric_context: Tuple[str, str, str],
+        colours: Sequence[Tuple[int, int, int]],
+    ) -> None:
+        """Draw a lyric band only when its words, colours or size change."""
+        width, height = self.layout_plan.inner(widget_id)
+        lyric_key = f"{lyric_context!r}|{tuple(colours)!r}|{width}|{height}"
+        large = bool(self.cfg.get("large_lyrics", True))
         self._update_static_cached(
-            "now-lyrics",
-            lyric_context_widget(
-                lyric_context, now_lyrics.size.width, now_lyrics.size.height, colours
-            ),
-            lyric_key,
+            widget_id, lyric_context_widget(lyric_context, width, height, colours, large), lyric_key
         )
 
     def _update_scope(
@@ -1797,91 +2014,86 @@ class EmberUI(App[None]):
             int(self.cfg.get("waveform_samples", 160)), dtype="f32",
         ) or [0.0] * int(self.cfg.get("waveform_samples", 160))
         self.query_one("#scope-wave", ScopeWidget).set_waveform(waveform, colours[1])
-        scope_lyrics = self.query_one("#scope-lyrics", Static)
-        lyric_key = (
-            f"{lyric_context!r}|{tuple(colours)!r}|"
-            f"{scope_lyrics.size.width}|{scope_lyrics.size.height}"
-        )
-        self._update_static_cached(
-            "scope-lyrics",
-            lyric_context_widget(
-                lyric_context, scope_lyrics.size.width, scope_lyrics.size.height, colours
-            ),
-            lyric_key,
-        )
+        self._update_lyrics("scope-lyrics", lyric_context, colours)
 
     def _update_info(self, meta: dict) -> None:
-        """Update info."""
-        identity = "\n".join([
-            "[b]IDENTITY[/b]",
-            "",
-            safe_markup(meta["title"]),
-            safe_markup(meta["artist"]),
-            safe_markup(meta["album"]),
-            f"YEAR   : {safe_markup(meta['year'])}",
-            f"DISC   : {safe_markup(meta['disc_number'] or 'N/A')}",
-            f"TRACK  : {safe_markup(meta['track_number'] or 'N/A')} / {safe_markup(meta['track_count'] or 'N/A')}",
-        ])
-        character = "\n".join([
-            "[b]MUSICAL CHARACTER[/b]",
-            "",
-            f"GENRE  : {safe_markup(meta['genre'])}",
-            f"MOOD   : {safe_markup(meta['mood'])}",
-            f"BPM    : {safe_markup(meta['bpm'])}",
-            f"LENGTH : {fmt_time(meta['duration'])}",
-            f"RATE   : {safe_markup(meta['rating'])}",
-            f"POP    : {safe_markup(meta['popularity'])}",
-        ])
-        provenance = "\n".join([
-            "[b]PROVENANCE[/b]",
-            "",
-            f"ADDED  : {safe_markup(meta['added'])}",
-            f"PLAYED : {safe_markup(meta['last_played'])}",
-            f"PLAYS  : {safe_markup(meta['play_count'])}",
-            f"FILE   : {safe_markup(meta['file_name'])}",
-            f"SIZE   : {safe_markup(meta['file_size'])}",
-        ])
-        format_lines = [
-            "[b]FORMAT + LEVEL[/b]",
-            "",
-            f"TYPE   : {safe_markup(meta['container'])}",
-            f"CODEC  : {safe_markup(meta['codec'])}",
-            f"AUDIO  : {safe_markup(meta['channels'])} ch · {safe_markup(meta['channel_layout'])}",
-            f"RATE   : {safe_markup(meta['sample_rate'])} · {safe_markup(meta['bit_depth'])}",
-            f"BITRATE: {safe_markup(meta['bitrate'])}",
-            f"STREAM : {safe_markup(meta['stream_title'])}",
-            f"GAIN   : {safe_markup(meta['track_gain'])}",
-            f"PEAK   : {safe_markup(meta['track_peak'])}",
-            f"ALB G  : {safe_markup(meta['album_gain'])}",
-            f"ALB P  : {safe_markup(meta['album_peak'])}",
-            f"ALB R  : {safe_markup(meta['album_range'])}",
-            f"LUFS   : {safe_markup(meta['loudness'])}",
-            f"LRA    : {safe_markup(meta['lra'])}",
-        ]
-        self._update_static_cached("info-identity", identity, identity)
-        self._update_static_cached("info-character", character, character)
-        self._update_static_cached("info-provenance", provenance, provenance)
-        format_text = "\n".join(format_lines)
-        self._update_static_cached("info-format", format_text, format_text)
+        """Four labelled lists. Fields the source does not report are left out,
+        and each list is ordered so the most useful rows survive a small grid."""
+        panels = {
+            "info-identity": (
+                [meta["title"], meta["artist"], meta["album"]],
+                [
+                    ("YEAR", meta["year"]),
+                    ("TRACK", track_label(meta["track_number"], meta["track_count"], prefix="")),
+                    ("DISC", meta["disc_number"]),
+                ],
+            ),
+            "info-character": ([], [
+                ("GENRE", meta["genre"]),
+                ("MOOD", meta["mood"]),
+                ("BPM", meta["bpm"]),
+                ("LENGTH", fmt_time(meta["duration"]) if meta["duration"] else ""),
+                ("RATING", meta["rating"]),
+                ("POP", meta["popularity"]),
+            ]),
+            "info-provenance": ([], [
+                ("ADDED", meta["added"]),
+                ("PLAYED", meta["last_played"]),
+                ("PLAYS", meta["play_count"]),
+                ("FILE", meta["file_name"]),
+                ("SIZE", meta["file_size"]),
+            ]),
+            "info-format": ([], [
+                ("CODEC", meta["codec"]),
+                ("TYPE", meta["container"]),
+                ("RATE", known_join([meta["sample_rate"], bit_depth_label(meta["bit_depth"])])),
+                ("BITRATE", meta["bitrate"]),
+                ("AUDIO", known_join([
+                    f"{meta['channels']} ch" if known(meta["channels"]) else "",
+                    meta["channel_layout"],
+                ])),
+                ("LUFS", meta["loudness"]),
+                ("LRA", meta["lra"]),
+                ("GAIN", meta["track_gain"]),
+                ("PEAK", meta["track_peak"]),
+                ("ALB GAIN", meta["album_gain"]),
+                ("ALB PEAK", meta["album_peak"]),
+                ("ALB RANGE", meta["album_range"]),
+                ("STREAM", meta["stream_title"]),
+            ]),
+        }
+        for widget_id, (heading, rows) in panels.items():
+            width, height = self.layout_plan.inner(widget_id)
+            text = key_value_block(heading, rows, width, height)
+            self._update_static_cached(widget_id, text, f"{text.plain}|{width}|{height}")
 
     def _update_console(self) -> None:
-        """Update console."""
-        source_label = self.log_tail.source_name.upper().replace("-", " ")
-        log_text = Text(f"FOUNDRY LOG · {source_label}\n", style="bold")
-        visible_logs = self.logs[-25:]
-        for index, line in enumerate(visible_logs):
-            log_text.append_text(line)
-            if index != len(visible_logs) - 1:
-                log_text.append("\n")
-        log_key = repr([(line.plain, line.spans) for line in visible_logs])
+        """Status band on top, then as much of the newest log as fits."""
+        status_w, _ = self.layout_plan.inner("console-status")
+        status_rows: List[Text] = []
+        for group in (self._heartbeat_tokens(), self._system_tokens(), self._control_tokens()):
+            status_rows.extend(pack_tokens(group, status_w))
+        if len(status_rows) != self._console_status_lines:
+            # A late service adds its age to the heartbeat row and can push
+            # the band onto another line; give that line to the band.
+            self._console_status_lines = len(status_rows)
+            self._apply_adaptive_layout()
+        status_text = Text("\n").join(status_rows)
+        self._update_static_cached(
+            "console-status", status_text, repr([(row.plain, row.spans) for row in status_rows])
+        )
+
+        log_widget = self.query_one("#console-logging", Static)
+        title = f"FOUNDRY LOG · {self.log_tail.source_name.upper().replace('-', ' ')}"
+        if log_widget.border_title != title:
+            log_widget.border_title = title
+        log_w, log_rows = self.layout_plan.inner("console-logging")
+        visible = tail_wrapped_lines(self.logs, log_w, log_rows)
+        log_key = f"{log_w}x{log_rows}|" + repr([(line.plain, line.spans) for line in visible])
+        # Bottom-aligned, so the newest line always sits on the panel's edge.
+        log_text = Text("\n" * (log_rows - len(visible)))
+        log_text.append_text(Text("\n").join(visible))
         self._update_static_cached("console-logging", log_text, log_key)
-        heartbeat_text = self._heartbeats_text()
-        self._update_static_cached("console-heartbeats", heartbeat_text, heartbeat_text)
-        diagnostics_widget = self.query_one("#console-diagnostics", Static)
-        diagnostics_text = self._diagnostics_text(diagnostics_widget.size.width)
-        self._update_static_cached("console-diagnostics", diagnostics_text, diagnostics_text)
-        controls_text = self._controls_text()
-        self._update_static_cached("console-controls", controls_text, controls_text)
 
 
 def main() -> None:
