@@ -20,6 +20,11 @@ sys.path.insert(0, str(ENGINE))
 
 import synapse  # noqa: E402
 
+try:
+    import _posixshmem  # POSIX only
+except ImportError:
+    _posixshmem = None
+
 
 class SynapseTests(unittest.TestCase):
     def tearDown(self):
@@ -34,6 +39,83 @@ class SynapseTests(unittest.TestCase):
     def test_key_normalisation_is_stable_and_bounded(self):
         self.assertEqual(synapse._norm("/proc/echo/heartbeat_ms"), "smem____proc__echo__heartbeat_ms")
         self.assertLessEqual(len(synapse._norm("/x" * 400)), 254)
+
+
+EMPTY_MMAP = ValueError("cannot mmap an empty file")  # what mmap raises for a 0-byte object
+
+
+def fake_segment(value: int):
+    buf = bytearray(4)
+    struct.pack_into("<i", buf, 0, value)
+    return SimpleNamespace(size=4, buf=buf, close=lambda: None)
+
+
+class CreationRaceTests(unittest.TestCase):
+    """A reader that opens a segment between its creation and its sizing (E-12)."""
+
+    def tearDown(self):
+        synapse._HANDLE_CACHE.clear()
+
+    def test_unsized_segment_reads_as_missing_and_is_retried_next_time(self):
+        opens = [EMPTY_MMAP, EMPTY_MMAP, EMPTY_MMAP, fake_segment(42)]
+
+        def open_untracked(norm, *, create, size):
+            self.assertFalse(create, "readers never create")
+            result = opens.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        with mock.patch.object(synapse, "_open_untracked", open_untracked), \
+                mock.patch.object(synapse, "_posix_segment_size", return_value=0, create=True):
+            self.assertEqual(synapse.get_int("/race/int", 7), 7)
+            self.assertEqual(synapse.get_float("/race/float", 1.5), 1.5)
+            self.assertIsNone(synapse.try_get_array("/race/array", 1, "i32"))
+            self.assertEqual(synapse._HANDLE_CACHE, {}, "an unsized segment is never cached")
+            self.assertEqual(synapse.get_int("/race/int", 7), 42, "the next read sees the sized segment")
+
+    def test_not_ready_is_a_kind_of_missing_segment(self):
+        self.assertTrue(issubclass(synapse.SegmentNotReady, FileNotFoundError))
+
+    def test_segment_sized_between_the_failure_and_the_check_is_opened(self):
+        opens = [EMPTY_MMAP, fake_segment(5)]
+
+        def open_untracked(norm, *, create, size):
+            result = opens.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        with mock.patch.object(synapse, "_open_untracked", open_untracked), \
+                mock.patch.object(synapse, "_posix_segment_size", return_value=4, create=True):
+            self.assertEqual(synapse.get_int("/race/late", 7), 5)
+
+    def test_unrelated_value_errors_are_not_suppressed(self):
+        for size in (None, 4):  # cannot attribute it, or the object is not empty
+            with self.subTest(size=size), \
+                    mock.patch.object(synapse, "_open_untracked", side_effect=ValueError("bad name")), \
+                    mock.patch.object(synapse, "_posix_segment_size", return_value=size, create=True):
+                with self.assertRaisesRegex(ValueError, "bad name"):
+                    synapse.get_int("/race/broken", 7)
+                with self.assertRaisesRegex(ValueError, "bad name"):
+                    synapse.try_get_array("/race/broken", 1)
+
+    def test_errors_raised_by_read_callers_are_untouched(self):
+        with self.assertRaisesRegex(ValueError, "dtype must be"):
+            synapse.try_get_array("/race/dtype", 1, "f64")
+
+    def test_writer_that_loses_the_creation_race_reports_not_ready(self):
+        # A second writer finds the segment already created (FileExistsError)
+        # and unsized. It gets SegmentNotReady rather than a bare ValueError.
+        def open_untracked(norm, *, create, size):
+            if create:
+                raise FileExistsError(norm)
+            raise EMPTY_MMAP
+
+        with mock.patch.object(synapse, "_open_untracked", open_untracked), \
+                mock.patch.object(synapse, "_posix_segment_size", return_value=0, create=True):
+            with self.assertRaises(synapse.SegmentNotReady):
+                synapse.set_int("/race/writer", 1)
 
 
 class MonotonicStampTests(unittest.TestCase):
@@ -109,6 +191,24 @@ class RealSegmentTests(unittest.TestCase):
     def test_unknown_dtype_is_rejected(self):
         with self.assertRaises(ValueError):
             synapse.set_array(self.key("bad"), [1], "f64")
+
+    @unittest.skipUnless(_posixshmem is not None, "POSIX shared memory required")
+    def test_real_unsized_segment_reads_as_missing(self):
+        # Recreate the state SharedMemory(create=True) passes through: the
+        # object exists but has not been ftruncate'd yet.
+        key = self.key("unsized")
+        path = "/" + synapse._norm(key)
+        fd = _posixshmem.shm_open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR, mode=0o600)
+        self.addCleanup(_posixshmem.shm_unlink, path)
+        try:
+            self.assertEqual(synapse.get_int(key, 7), 7)
+            self.assertIsNone(synapse.try_get_array(key, 1, "i32"))
+            self.assertEqual(synapse._HANDLE_CACHE, {})
+            os.ftruncate(fd, 4)  # the creator finishes
+        finally:
+            os.close(fd)
+        synapse.set_int(key, 9)
+        self.assertEqual(synapse.get_int(key, 7), 9)
 
 
 if __name__ == "__main__":

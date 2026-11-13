@@ -11,6 +11,7 @@ unregister workaround, which can break on Python 3.13 when a fresh UI process
 opens an existing segment.
 """
 from multiprocessing import shared_memory
+import os
 import struct
 import sys
 import time
@@ -22,11 +23,27 @@ try:
 except Exception:
     _rt = None
 
+try:
+    import _posixshmem  # POSIX only; the module SharedMemory itself uses
+except ImportError:
+    _posixshmem = None
+
 _HANDLE_CACHE: Dict[str, shared_memory.SharedMemory] = {}
 
 
 class SharedMemoryLayoutError(RuntimeError):
     """A persistent segment is smaller than the current reader/writer contract."""
+
+
+class SegmentNotReady(FileNotFoundError):
+    """The segment exists but its creator has not sized it yet.
+
+    ``SharedMemory(create=True)`` creates the POSIX object and then sizes it.
+    A process that opens it in between finds an empty object, which
+    ``mmap`` refuses with ``ValueError``. That is the same "not there yet"
+    as a missing segment, so it subclasses ``FileNotFoundError``: readers
+    return their default and try again on the next read.
+    """
 
 
 def _norm(name: str) -> str:
@@ -55,6 +72,35 @@ def _open_untracked(norm: str, *, create: bool, size: int) -> shared_memory.Shar
         return h
 
 
+def _posix_segment_size(norm: str):
+    """Current size of a named POSIX segment, or None if it cannot be read."""
+    if _posixshmem is None:
+        return None
+    try:
+        fd = _posixshmem.shm_open("/" + norm, os.O_RDONLY, mode=0o600)
+    except OSError:
+        return None
+    try:
+        return os.fstat(fd).st_size
+    finally:
+        os.close(fd)
+
+
+def _open_existing(norm: str) -> shared_memory.SharedMemory:
+    """Open a segment another process created; an unsized one is SegmentNotReady."""
+    try:
+        return _open_untracked(norm, create=False, size=0)
+    except ValueError:
+        # Only an empty object is the creation race. Any other ValueError,
+        # or one we cannot attribute, is re-raised unchanged.
+        current = _posix_segment_size(norm)
+        if current == 0:
+            raise SegmentNotReady(f"shared-memory segment {norm!r} is still being created") from None
+        if current:
+            return _open_untracked(norm, create=False, size=0)  # sized in the meantime
+        raise
+
+
 def _get_handle(name: str, size: int, create: bool):
     """Return handle."""
     norm = _norm(name)
@@ -68,10 +114,10 @@ def _get_handle(name: str, size: int, create: bool):
         return h
 
     try:
-        h = _open_untracked(norm, create=create, size=size)
+        h = _open_untracked(norm, create=True, size=size) if create else _open_existing(norm)
     except FileExistsError:
         # First writer may have already created it. Re-open without creation.
-        h = _open_untracked(norm, create=False, size=0)
+        h = _open_existing(norm)
 
     if size > h.size:
         actual_size = h.size
@@ -86,7 +132,7 @@ def _get_handle(name: str, size: int, create: bool):
 
 # ---------- Scalars ----------
 def get_int(name: str, default: int = 0) -> int:
-    """Read a 32-bit signed int. Returns default if segment is missing."""
+    """Read a 32-bit signed int. Returns default if segment is missing or not yet sized."""
     try:
         h = _get_handle(name, 4, create=False)
         return int(struct.unpack_from("<i", h.buf, 0)[0])
@@ -101,7 +147,7 @@ def set_int(name: str, value: int) -> None:
 
 
 def get_float(name: str, default: float = 0.0) -> float:
-    """Read a 32-bit float. Returns default if segment is missing."""
+    """Read a 32-bit float. Returns default if segment is missing or not yet sized."""
     try:
         h = _get_handle(name, 4, create=False)
         return float(struct.unpack_from("<f", h.buf, 0)[0])
@@ -117,7 +163,7 @@ def set_float(name: str, value: float) -> None:
 
 # ---------- Arrays ----------
 def try_get_array(name: str, length: int, dtype: str = "f32"):
-    """Return a list, or None if the segment does not exist yet."""
+    """Return a list, or None if the segment does not exist (or is not sized) yet."""
     if dtype == "f32":
         item_size, fmt = 4, f"<{length}f"
     elif dtype == "u8":
