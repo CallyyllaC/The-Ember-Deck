@@ -25,6 +25,7 @@ They are not a drop-in recipe for every vintage radio. Hardware and software req
 - Drives a ten-segment track-progress display and six status indicators.
 - Renders live audio effects on a 24-pixel RGBW strip.
 - Shows media, lyrics, diagnostics and system state across two displays.
+- Draws the album cover and four audio visualisers as real pixels on the panel display.
 - Supervises its worker processes and presents structured, personality-driven logs.
 - Provides Ethernet, fast-charge USB, USB data, stereo line input and monitored headphone output.
 - Displays live internal voltage and current draw on a dedicated panel meter.
@@ -42,7 +43,7 @@ The documentation has been split into separate guides.
 | [Enabling Discord Rich Presence](docs/ENABLING_DISCORD_RICH_PRESENCE.md) | Optional Discord presence and hosted Plex artwork: setup, configuration, privacy and removal |
 | [Backup and troubleshooting](docs/TROUBLESHOOTING.md) | System images, audio routing, USB recovery and common checks |
 | [Media gallery](docs/MEDIA.md) | Finished-build photographs and demonstration videos |
-| [Changelog](CHANGELOG.md) | v2 changes, upgrade steps from V1 and known limitations |
+| [Changelog](CHANGELOG.md) | v3 and v2 changes, how to update and known limitations |
 
 ## Runtime at a glance
 
@@ -93,6 +94,16 @@ Ember Deck can show what it is doing on your Discord profile, for example "Liste
 
 Setup, configuration and troubleshooting are in [Enabling Discord Rich Presence](docs/ENABLING_DISCORD_RICH_PRESENCE.md).
 
+## Awoo supporters (optional)
+
+Everything in Ember Deck works for everyone. As a thank-you, Awoo supporters also get a CRT switch-off transition between panel pages.
+
+1. Support on Ko-fi through the [Awoo support page](https://awoo.ltd/support) while signed in to Ko-fi, then claim your code at [awoo.ltd/support/activate](https://awoo.ltd/support/activate); it is emailed to you.
+2. On the Deck: `~/EmberDeck/.venv/bin/python ~/EmberDeck/supporter_check.py --install`, paste the code, then `systemctl --user restart ember-ui.service`.
+3. Check it any time with `~/EmberDeck/.venv/bin/python ~/EmberDeck/supporter_check.py`, or look for `SUPPORTER ✓` on the Console page.
+
+Details and troubleshooting: [AWOO-SUPPORTER-SYSTEM.md](AWOO-SUPPORTER-SYSTEM.md).
+
 ## Important safety note
 
 The donor unit originally contained CRT circuitry, and the finished Deck contains mains wiring.
@@ -103,9 +114,13 @@ If you are not competent enough to identify, discharge, isolate and safely enclo
 
 ## Project status
 
-The Ember Deck is at its **v2 release**.
+The Ember Deck is at its **v3 release**.
 
-v2 is a software release on the finished V1 hardware. It adds optional Discord Rich Presence with hosted Plex artwork, unattended Plex sign-in with credentials kept in a separate private file, per-Deck local configuration overlays, strict configuration validation and more resilient worker supervision. The full list, upgrade steps and known limitations are in the [changelog](CHANGELOG.md).
+v3 is a software release on the same finished V1 hardware, and it is mostly about the panel display. The panel now runs in the kitty terminal, which lets it draw real pixels: the full album cover on Now Playing, and four visualisers on the Scope page, chosen with the original selectors (a phosphor oscilloscope in the album's colours, peak-hold bars, a scrolling spectrogram, and a spectrum ring around the Awoo logo). Lyrics and track details use large dot-matrix lettering, the layout fits bigger terminal fonts, and the text is easier to read in person. Around the panel, the LED strip plays a start-up ignition, an optional boot set adds an Awoo boot screen and a boot running light, and Awoo supporters get CRT-style page transitions. A USB updater moves an existing Deck to the new version without touching its configuration and rolls itself back if anything comes up unhealthy. v3 also carries a round of reliability fixes from a full code review.
+
+v2 added optional Discord Rich Presence with hosted Plex artwork, unattended Plex sign-in, per-Deck local configuration overlays, strict configuration validation and more resilient worker supervision.
+
+The full lists, how to update and known limitations are in the [changelog](CHANGELOG.md).
 
 The hardware works, the software works, and the final photographs and demonstration videos have been recorded. After nine months of on-and-off tinkering, I am happy to call this chapter finished and move on to something new.
 

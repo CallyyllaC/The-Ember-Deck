@@ -134,7 +134,7 @@ A valid configuration without Plex identity or credentials does not stop Minstre
 | `clock_fresh_deadband_s` | seconds | `0.35` | Difference ignored to avoid clock jitter. |
 | `clock_offset_change_epsilon_s` | seconds | `0.001` | Minimum correction change worth applying. |
 | `album_art_enabled` | boolean | `true` | Enables 48×48 shared-memory artwork. |
-| `album_art_width`, `album_art_height` | pixels 12–48 | `48` | Requested Plex transcode size. Shared bus remains a fixed 48×48 canvas. |
+| `album_art_width`, `album_art_height` | pixels 12–48 | `48` | Size of the small cover mosaic (a fixed 48×48 bus canvas). Minstrel always fetches the cover at 320 px (512 px with the artwork service) and also publishes it whole, up to 320 × 320, for the panel's full-resolution cover. |
 | `album_art_timeout_s` | seconds | `5.0` | Cover download timeout (also used for the public artwork lookup). |
 | `public_artwork_lookup` | boolean | `false` | For Discord Rich Presence artwork (`artwork_mode: on`): on each new album, check whether the selected album poster is an original public https URL supplied by a metadata agent and publish it. One extra Plex request per new album; server-stored artwork, server URLs and tokens are never published. The existing cover download is unchanged. |
 
@@ -210,6 +210,7 @@ A valid configuration without Plex identity or credentials does not stop Minstre
 | `usb_current_ma` | mA | `400` | Safe total USB budget when the strip is USB-powered. |
 | `external_power` | boolean | `true` | Disables USB brightness limiting because the strip has its own PSU. Do not set true for a USB-powered strip. |
 | `data_channel` | integer ≥0 | `0` | BlinkStick Pro output channel. |
+| `ignition` | boolean | `true` (code default) | Play the start-up animation in Awoo colours (sweep, rise, white flash, fade; about 2.6 s) when the strip connects, before the first audio frame. It follows the brightness knob and the power budget like everything else. |
 
 ## HDMI-2 source controller
 
@@ -264,10 +265,13 @@ The REC hold cycles PLEX → RADIO → YOUTUBE → PLEX. A guest app that cannot
 | `scope_refresh_hz` | Hz | `50` | Scope-page refresh while visible. |
 | `system_refresh_s`, `log_refresh_s` | seconds | `2`, `1` | Host diagnostics and log refresh intervals. |
 | `metadata_dead_grace_s`, `art_dead_grace_s` | seconds | `2`, `2` | Retain last metadata/art across brief source gaps. |
-| `ui_brightness_floor`, `ui_brightness_ceiling` | ratio 0–1 | `0.52`, `1.0` | Colour scaling from Pawprint brightness; monitor backlight/art are unaffected. |
+| `ui_brightness_floor`, `ui_brightness_ceiling` | ratio 0–1 | `0.52`, `1.0` | Colour scaling of the panel's background, borders and headings from Pawprint brightness. Text only dims to 90 %, so it stays readable with the knob turned down. The monitor backlight and art are unaffected. |
 | `diagnostics_scroll_step_s` | seconds | `0.35` | Marquee step for long Wi-Fi/IP text. |
-| `scope_pixel_fps` | frames per second, 1–60 | `30` (code default) | How often the Scope page's phosphor oscilloscope sends a new frame to kitty. Each frame is about 40 KB through the terminal; lower it if the Pi's CPU is busy. |
+| `scope_pixel_fps` | frames per second, 1–60 | `30` (code default) | How often the Scope page's visualiser sends a new frame to kitty. Each frame is about 40 KB through the terminal; lower it if the Pi's CPU is busy. |
 | `scope_image_update` | `replace` or `edit` | `replace` (code default) | How a frame reaches kitty: `replace` sends it as a new image and places it again; `edit` rewrites the image in place, which is lighter but not yet proven on the Deck. |
+| `scope_visualiser` | `scope`, `bars`, `spectrogram` or `radial` | `scope` (code default) | The Scope page's visualiser at start, until the selectors choose one: with the source selector in its centre position the four-way selector picks 1 `scope` (phosphor oscilloscope), 2 `bars` (peak-hold bars in the album's colours), 3 `spectrogram` (scrolling, in the album's colours), 4 `radial` (Awoo logo, ring and starfield) and shows the Scope page. The choice lasts until the UI restarts. |
+| `page_transitions` | boolean | `true` (code default) | Supporter feature: a CRT switch-off and switch-on between pages when a valid Awoo supporter licence is installed and the panel runs in kitty. Without a licence pages change instantly whatever this says. See [AWOO-SUPPORTER-SYSTEM.md](../AWOO-SUPPORTER-SYSTEM.md). |
+| `supporter_licence_path` | path | `~/.config/awoo/supporter.licence` (code default) | Where the panel looks for the supporter licence, read once at start. |
 | `large_lyrics` | boolean | `true` | Draw the current lyric line as large dot-matrix capitals, about two and a half times the height of normal text. Used only where the lyric band holds about 48 large characters (on an 80 × 30 grid, not on 60 × 22), so lines do not switch size one after another. A line that is too long, or has characters the dot font lacks (CJK, emoji), is shown as normal text. Needs Braille glyphs in the terminal font; DejaVu Sans Mono has them. |
 | `log_path` | path | `logs/foundry.log` | Legacy plain log fallback, relative to EmberEngine. |
 | `structured_log_path` | path | `logs/foundry.structured.jsonl` | Whisper's bounded UI snapshot. |

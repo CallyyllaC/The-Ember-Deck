@@ -1,0 +1,23 @@
+# Ember Deck boot running light (optional; installed by tools/boot_set).
+# Runs boot_lights.py as the Ember Deck user early in boot, before the user
+# session, and exits by itself once Pawprint starts. [USERNAME] and [HOME] are replaced
+# with the Ember Deck user and home folder when installed.
+[Unit]
+Description=Ember Deck boot running light
+DefaultDependencies=no
+After=local-fs.target systemd-modules-load.service
+Conflicts=shutdown.target
+Before=shutdown.target
+ConditionPathExists=[HOME]/EmberDeck/boot_lights.py
+
+[Service]
+Type=simple
+User=[USERNAME]
+SupplementaryGroups=i2c
+WorkingDirectory=[HOME]/EmberDeck
+ExecStart=[HOME]/EmberDeck/.venv/bin/python [HOME]/EmberDeck/boot_lights.py
+TimeoutStopSec=3
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

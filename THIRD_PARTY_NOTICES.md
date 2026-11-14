@@ -24,7 +24,7 @@ The repository does not contain installed copies of these packages. They are ins
 | [Textual](https://pypi.org/project/textual/8.2.7/) | 8.2.7 | MIT |
 | [cryptography](https://pypi.org/project/cryptography/43.0.0/) | 43.0.0 | Apache-2.0 OR BSD-3-Clause |
 
-`cryptography` provides the Ed25519 verification in `awoo_supporter.py`, the retained Awoo supporter-licence verifier. Ember Deck currently defines no Supporter Features, so no runtime service uses it; without `cryptography` the verifier fails closed and everything else is unaffected.
+`cryptography` provides the Ed25519 verification in `awoo_supporter.py`, the Awoo supporter-licence verifier. Only the panel UI uses it, once at start, for the supporter page transitions (see [AWOO-SUPPORTER-SYSTEM.md](AWOO-SUPPORTER-SYSTEM.md)); without `cryptography` the verifier fails closed and everything else is unaffected.
 
 Those packages may carry their own bundled components and notices. A distribution that includes package files, wheels, native libraries or a full runtime environment must preserve the licence and notice files supplied with the exact distributions it ships.
 

@@ -97,9 +97,9 @@ KEY_PLEX_ALBUM_RANGE_UTF8 = "/plex/album_range_utf8"
 KEY_PLEX_LRA_UTF8 = "/plex/lra_utf8"
 KEY_PLEX_LAST_PLAYED_UTF8 = "/plex/last_played_utf8"
 
-# Terminal-native album-cover mosaic. The UI reads a small RGB raster from
-# shared memory and renders it using coloured half-block characters, so this
-# works in LXTerminal without sixel/kitty/iTerm image support.
+# Small album-cover mosaic. The panel draws the full cover below when it runs
+# in kitty; this 48 × 48 raster remains for half-block drawing in any other
+# terminal and for tools that read it.
 ART_WIDTH = 48
 ART_HEIGHT = 48
 KEY_PLEX_ART_VALID = "/plex/art_valid"
@@ -110,6 +110,12 @@ KEY_PLEX_ART_PUBLIC_URL_UTF8 = "/plex/art_public_url_utf8"
 # current cover, served by artwork_service.py through a Cloudflare Tunnel.
 KEY_PLEX_ART_HOSTED_URL_UTF8 = "/plex/art_hosted_url_utf8"
 HOSTED_ART_SOURCE_SIZE = 512
+# The panel's full cover (kitty draws it as pixels): a fixed 320 × 320 RGB
+# segment, of which the top-left ``art_panel_size`` square is valid (0 = none).
+# It is written before ``/plex/art_seq`` advances, like the mosaic.
+PANEL_ART_SIZE = 320
+KEY_PLEX_ART_PANEL_RGB = "/plex/art_panel_rgb"
+KEY_PLEX_ART_PANEL_SIZE = "/plex/art_panel_size"
 ARTWORK_URL_BYTES = 512
 PUBLIC_ART_CACHE_LIMIT = 64
 KEY_PLEX_ART_SEQ = "/plex/art_seq"
@@ -885,6 +891,7 @@ def _clear_album_art() -> None:
     bus.set_int(KEY_PLEX_ART_VALID, 0)
     bus.set_int(KEY_PLEX_ART_WIDTH, 0)
     bus.set_int(KEY_PLEX_ART_HEIGHT, 0)
+    bus.set_int(KEY_PLEX_ART_PANEL_SIZE, 0)
     bus.set_int(KEY_PLEX_ART_SEQ, (bus.get_int(KEY_PLEX_ART_SEQ, 0) + 1) & 0x7FFFFFFF)
 
 
@@ -960,6 +967,30 @@ def publish_album_art(server, detail, sess, cfg: dict, artwork_cache=None) -> No
         publish_hosted_art_url(hosted)
 
 
+def _fetch_cover(server, thumb_key: str, size: int, timeout: float):
+    """The cover, at most ``size`` px: (the bytes, the RGB image).
+
+    The original cover is downloaded and resized here, not by Plex's photo
+    transcoder. The transcoder makes the server fetch the cover from its own
+    ``plex.direct`` address, which fails on a server that cannot resolve or
+    reach that address (a 15 s wait, then 404), and then the Deck and
+    Discord have no cover at all. The original is a few hundred kB on the
+    local network and resizing it takes milliseconds.
+    """
+    response = server._session.get(server.url(thumb_key, includeToken=True), timeout=timeout)
+    response.raise_for_status()
+    content = response.content
+    with Image.open(io.BytesIO(content)) as source:
+        source.draft("RGB", (size, size))          # JPEG: decode at a reduced scale, much faster
+        image = source.convert("RGB")
+    if max(image.size) > size:
+        image.thumbnail((size, size), getattr(getattr(Image, "Resampling", Image), "LANCZOS"))
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=90)
+        content = buffer.getvalue()
+    return content, image
+
+
 def _publish_album_art(server, detail, sess, cfg: dict, artwork_cache) -> str:
     if not bool(cfg.get("album_art_enabled", True)):
         _clear_album_art()
@@ -982,41 +1013,38 @@ def _publish_album_art(server, detail, sess, cfg: dict, artwork_cache) -> str:
             _clear_album_art()
             return ""
 
-        source_url = server.url(thumb_key, includeToken=True)
-        if artwork_cache is not None:
-            fetch_w = fetch_h = HOSTED_ART_SOURCE_SIZE
-            fetch_format = "jpeg"
-        else:
-            fetch_w, fetch_h, fetch_format = width, height, "png"
-        image_url = server.transcodeImage(
-            source_url,
-            height=fetch_h,
-            width=fetch_w,
-            minSize=False,
-            upscale=True,
-            imageFormat=fetch_format,
-        )
-        response = server._session.get(image_url, timeout=timeout)
-        response.raise_for_status()
+        # One JPEG per track: big enough for the panel's full cover, or for
+        # the artwork service's 512 px copy when that is enabled. The mosaic,
+        # the full cover and the hosted copy all come from this one download.
+        fetch_size = HOSTED_ART_SOURCE_SIZE if artwork_cache is not None else PANEL_ART_SIZE
+        content, square = _fetch_cover(server, thumb_key, fetch_size, timeout)
 
-        with Image.open(io.BytesIO(response.content)) as source:
-            resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
-            rgb = ImageOps.fit(
-                source.convert("RGB"),
-                (width, height),
-                method=resampling,
-            )
-            pixels = np.asarray(rgb, dtype=np.uint8)
-            if artwork_cache is not None:
-                try:
-                    hosted = artwork_cache.store_cover(
-                        response.content,
-                        album=_first_text(detail, sess, "parentTitle"),
-                        artist=_first_text(detail, sess, "grandparentTitle"),
-                    ) or ""
-                except Exception as exc:  # the UI artwork must not depend on the cache
-                    print(f"[minstrel] Artwork cache unavailable: {type(exc).__name__}", flush=True)
-                    hosted = ""
+        resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+        pixels = np.asarray(ImageOps.fit(square, (width, height), method=resampling), dtype=np.uint8)
+
+        # The full cover is a bonus: failing to publish it keeps the mosaic.
+        try:
+            panel_edge = min(PANEL_ART_SIZE, square.width, square.height)
+            panel = np.asarray(ImageOps.fit(square, (panel_edge, panel_edge), method=resampling),
+                               dtype=np.uint8)
+            panel_canvas = np.zeros((PANEL_ART_SIZE, PANEL_ART_SIZE, 3), dtype=np.uint8)
+            panel_canvas[:panel_edge, :panel_edge] = panel
+            bus.set_array(KEY_PLEX_ART_PANEL_RGB, panel_canvas.reshape(-1), "u8")
+        except Exception as exc:
+            print(f"[minstrel] Full album cover not published, keeping the small cover: "
+                  f"{type(exc).__name__}: {exc}", flush=True)
+            panel_edge = 0
+        if artwork_cache is not None:
+            try:
+                hosted = artwork_cache.store_cover(
+                    content,
+                    album=_first_text(detail, sess, "parentTitle"),
+                    artist=_first_text(detail, sess, "grandparentTitle"),
+                ) or ""
+            except Exception as exc:  # the UI artwork must not depend on the cache
+                print(f"[minstrel] Artwork cache unavailable: {type(exc).__name__}", flush=True)
+                hosted = ""
+        bus.set_int(KEY_PLEX_ART_PANEL_SIZE, panel_edge)
 
         # The segment's first writer fixes its size. Always publish the stable
         # 48×48 bus capacity, with dimensions describing the valid top-left

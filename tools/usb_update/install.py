@@ -11,7 +11,7 @@ Run through install.sh, which installs kitty first. This script:
 3. Copies the new program files in. It never changes an existing file under
    ~/EmberDeck/configs; a config file the new code expects but you do not
    have is added. Nothing outside ~/EmberDeck is touched apart from the
-   backup folder and ~/EmberDeck-terminal-tests (the optional test kit).
+   backup folder.
 4. Starts the services that were running and watches them. If the runtime or
    the kitty panel does not come up healthy, it restores the backup and
    restarts the old install by itself.
@@ -255,11 +255,42 @@ def latest_backup(backups: Path) -> Path:
 
 
 # --------------------------------------------------------------------------- install
-def install_files(target: Path, usb: Path, log: Log) -> List[str]:
+def boot_history(usb: Path) -> Dict[str, set]:
+    """Every shipped version (sha256) of each boot file, from the payload."""
+    history: Dict[str, set] = {}
+    path = usb / "payload" / "boot-history.sha256"
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            digest, _, rel = line.partition("  ")
+            if rel:
+                history.setdefault(rel, set()).add(digest)
+    return history
+
+
+def changed_on_this_deck(dest: Path, source: Path, shipped: set) -> bool:
+    """A boot file that matches neither this version nor any shipped one."""
+    if not dest.is_file():
+        return False
+    data = dest.read_bytes()
+    return data != source.read_bytes() and hashlib.sha256(data).hexdigest() not in shipped
+
+
+def install_files(target: Path, usb: Path, log: Log, keep_dir: Optional[Path] = None) -> List[str]:
     payload = usb / "payload" / "EmberDeck"
+    history = boot_history(usb)
+    kept = []
     written = 0
     for rel in payload_files(payload):
         source, dest = payload / rel, target / rel
+        # The boot theme is the one place a Deck owner adjusts files for their
+        # own hardware (images flipped for an upside-down screen, the script's
+        # display geometry). Keep those; save this version beside the backup.
+        if rel.startswith("boot/") and changed_on_this_deck(dest, source, history.get(rel, set())):
+            if keep_dir is not None:
+                (keep_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, keep_dir / rel)
+            kept.append(rel)
+            continue
         dest.parent.mkdir(parents=True, exist_ok=True)
         temp = dest.with_name(dest.name + ".update-tmp")
         shutil.copyfile(source, temp)
@@ -274,22 +305,14 @@ def install_files(target: Path, usb: Path, log: Log) -> List[str]:
             shutil.copy2(path, dest)
             added.append(path.name)
     log(f"Installed {written} program files.")
+    if kept:
+        where = f" (this version's copies: {keep_dir})" if keep_dir is not None else ""
+        log("Kept boot theme files you changed on this Deck: " + ", ".join(kept) + where)
     if added:
         log("Added config files you did not have yet: " + ", ".join(added))
     else:
         log("No config file was changed or added.")
     return added
-
-
-def install_test_kit(usb: Path, home: Path, log: Log) -> None:
-    source = usb / "payload" / "terminal-tests"
-    if not source.is_dir():
-        return
-    dest = home / "EmberDeck-terminal-tests"
-    if dest.exists():
-        shutil.rmtree(dest)
-    shutil.copytree(source, dest)
-    log(f"Copied the terminal test kit to {dest} (not used by the Deck).")
 
 
 def config_notes(target: Path) -> List[str]:
@@ -334,7 +357,7 @@ def update(usb: Path, home: Path) -> int:
         start_units(units, log)
         return 1
     try:
-        install_files(target, usb, log)
+        install_files(target, usb, log, keep_dir=backups / f"new-boot-files-{stamp}")
     except Exception as exc:
         log(f"\nCopying the new files failed ({exc}). Restoring the backup.")
         restore(meta, log)
@@ -352,7 +375,6 @@ def update(usb: Path, home: Path) -> int:
         log(f"\nRolled back. kitty stays installed. The full log is {log.path}")
         return 1
 
-    install_test_kit(usb, home, log)
     log("\nUpdate complete.")
     log(f"  Backup:     {backups / json.loads(meta.read_text())['archive']}")
     log(f"  Log:        {log.path}")

@@ -289,13 +289,14 @@ class MinstrelHostedArtworkTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.cache = artwork_cache.ArtworkCache(self.tmp / "artwork", "https://artwork.example.org")
 
-    def server(self, colour=(10, 120, 200), size=512):
+    def server(self, colour=(10, 120, 200), size=1280):
+        """A Plex server whose original cover is ``size`` px (1280 like the Deck's library)."""
         from PIL import Image
         buffer = io.BytesIO()
         Image.new("RGB", (size, size), colour).save(buffer, format="JPEG")
         server = mock.Mock()
         server.url.return_value = "http://192.168.1.20:32400/library/metadata/1/thumb?X-Plex-Token=sekret"
-        server.transcodeImage.return_value = "http://192.168.1.20:32400/photo/:/transcode?X-Plex-Token=sekret"
+        server.transcodeImage.side_effect = AssertionError("Plex's photo transcoder is not used")
         server._session.get.return_value = mock.Mock(content=buffer.getvalue(), raise_for_status=lambda: None)
         return server
 
@@ -308,11 +309,11 @@ class MinstrelHostedArtworkTests(unittest.TestCase):
                           grandparentTitle="In Flames")
         seq = self.bus.get_int("/plex/metadata_seq", 0)
         minstrel.publish_album_art(server, track, track, {"album_art_enabled": True}, artwork_cache=self.cache)
-        kwargs = server.transcodeImage.call_args.kwargs
-        self.assertEqual((kwargs["width"], kwargs["height"], kwargs["imageFormat"]), (512, 512, "jpeg"))
+        server.url.assert_called_once_with("/library/metadata/1/thumb/1700000000", includeToken=True)
         self.assertEqual(server._session.get.call_count, 1, "no second download")
         self.assertEqual(self.bus.get_int("/plex/art_valid"), 1)
         self.assertEqual((self.bus.get_int("/plex/art_width"), self.bus.get_int("/plex/art_height")), (48, 48))
+        self.assertEqual(self.bus.get_int("/plex/art_panel_size"), 320, "the panel cover comes from the same download")
         url = self.hosted()
         self.assertRegex(url, r"^https://artwork\.example\.org/come-clarity-in-flames\.png\?v=[0-9a-f]{12}$")
         for private in ("sekret", "192.168", "32400", "metadata", "thumb"):
@@ -330,14 +331,62 @@ class MinstrelHostedArtworkTests(unittest.TestCase):
         minstrel.publish_album_art(self.server(colour=(250, 10, 10)), track, track, {}, artwork_cache=self.cache)
         self.assertNotEqual(self.hosted(), first)
 
-    def test_disabled_cache_keeps_the_original_tiny_request(self):
-        server = self.server(size=48)
+    def test_without_the_cache_one_panel_sized_download_feeds_both_covers(self):
+        server = self.server(colour=(200, 40, 90), size=320)
         track = mock.Mock(parentThumb="/library/metadata/1/thumb/1")
         minstrel.publish_album_art(server, track, track, {"album_art_enabled": True})
-        kwargs = server.transcodeImage.call_args.kwargs
-        self.assertEqual((kwargs["width"], kwargs["height"], kwargs["imageFormat"]), (48, 48, "png"))
+        self.assertEqual(server._session.get.call_count, 1)
+        self.assertEqual(self.bus.get_int("/plex/art_panel_size"), 320)
+        panel = self.bus.try_get_bytes("/plex/art_panel_rgb", 320 * 320 * 3)
+        centre = panel[(160 * 320 + 160) * 3:(160 * 320 + 160) * 3 + 3]
+        self.assertTrue(all(abs(a - b) <= 6 for a, b in zip(centre, (200, 40, 90))), "the panel cover is the image")
+        self.assertEqual((self.bus.get_int("/plex/art_width"), self.bus.get_int("/plex/art_height")), (48, 48))
         self.assertEqual(self.hosted(), "N/A")
         self.assertEqual(list(self.tmp.iterdir()), [], "nothing is cached")
+
+    def test_the_original_cover_is_resized_on_the_deck(self):
+        """Plex's photo transcoder made the server fetch its own plex.direct
+        address; a server that cannot (a 15 s wait, then 404) left the Deck
+        and Discord with no cover. The original is fetched and resized here."""
+        from PIL import Image
+        server = self.server(colour=(200, 40, 90), size=1280)
+        content, image = minstrel._fetch_cover(server, "/library/metadata/1/thumb/1", 512, 5.0)
+        self.assertEqual(image.size, (512, 512))
+        with Image.open(io.BytesIO(content)) as sent:
+            self.assertEqual((sent.format, sent.size), ("JPEG", (512, 512)), "the hosted copy is resized too")
+        self.assertEqual(server.transcodeImage.call_count, 0)
+        url = server._session.get.call_args.args[0]
+        self.assertNotIn("transcode", url)
+
+    def test_a_cover_no_bigger_than_asked_is_kept_as_it_is(self):
+        server = self.server(size=300)
+        original = server._session.get.return_value.content
+        content, image = minstrel._fetch_cover(server, "/t", 512, 5.0)
+        self.assertEqual((content, image.size), (original, (300, 300)))
+
+    def test_a_failed_full_cover_keeps_the_mosaic(self):
+        real_set_array = self.bus.set_array
+
+        def set_array(name, values, dtype="f32"):
+            if name == "/plex/art_panel_rgb":
+                raise RuntimeError("stale segment")
+            return real_set_array(name, values, dtype)
+        out = io.StringIO()
+        with mock.patch.object(self.bus, "set_array", side_effect=set_array), redirect_stdout(out):
+            minstrel.publish_album_art(self.server(size=320), mock.Mock(parentThumb="/t"), None, {})
+        self.assertEqual(self.bus.get_int("/plex/art_valid"), 1)
+        self.assertEqual(self.bus.get_int("/plex/art_panel_size"), 0)
+        self.assertEqual((self.bus.get_int("/plex/art_width"), self.bus.get_int("/plex/art_height")), (48, 48))
+        self.assertIn("keeping the small cover", out.getvalue())
+
+    def test_a_small_cover_is_published_at_its_own_size_and_cleared_on_failure(self):
+        minstrel.publish_album_art(self.server(size=200), mock.Mock(parentThumb="/t"), None, {})
+        self.assertEqual(self.bus.get_int("/plex/art_panel_size"), 200, "never enlarged by Minstrel")
+        broken = self.server()
+        broken._session.get.side_effect = ConnectionError("offline")
+        with redirect_stdout(io.StringIO()):
+            minstrel.publish_album_art(broken, mock.Mock(parentThumb="/t"), None, {})
+        self.assertEqual(self.bus.get_int("/plex/art_panel_size"), 0)
 
     def test_failures_publish_no_hosted_url_and_leak_nothing(self):
         track = mock.Mock(parentThumb="/library/metadata/1/thumb/1")

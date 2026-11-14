@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=Ember Deck
+Description=The awoo logo over the awoo.ltd starfield, for the Ember Deck boot.
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/emberdeck
+ScriptFile=/usr/share/plymouth/themes/emberdeck/emberdeck.script

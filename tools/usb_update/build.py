@@ -4,7 +4,7 @@
     python tools/usb_update/build.py [output-folder]
 
 The folder holds install.sh, install.py, rollback.sh, README.txt, VERSION,
-MANIFEST.sha256 and payload/:
+CHANGELOG.md, AWOO-SUPPORTER-SYSTEM.md, MANIFEST.sha256 and payload/:
 
 * payload/EmberDeck        every file under EmberEngine/ that git tracks or
                            would track (ignored files such as secrets,
@@ -13,7 +13,7 @@ MANIFEST.sha256 and payload/:
 * payload/configs-shipped  the shipped config templates from
                            EmberEngine/configs, used only to validate and to
                            add files a Deck does not have yet
-* payload/terminal-tests   the terminal investigation's test kit
+* boot-set/                the optional boot set installer (run separately)
 
 Text files are written with LF line endings whatever the checkout uses.
 """
@@ -29,13 +29,48 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
-TEST_KIT = ROOT / "experiments" / "terminal-investigation"
-TEST_KIT_FILES = ("README.md", "pi_probe.py", "kitty_textsize_demo.py", "kitty_graphics_demo.py",
-                  "textsize_filter.py", "visualisers.py", "verify_textsize_model.py")
+
+
+# Boot files the update shipped before they were committed (sha256 of the
+# file as installed). Any version in git history is found automatically.
+EARLIER_BOOT_FILES = {
+    "boot/plymouth/emberdeck/emberdeck.script": {
+        "cfd27c1ee384c62cf4b37793ae09baa8f234267e18b1e9931596c8e4908a3fd7",  # 2026-11-13 build
+    },
+}
 
 
 def git(*args: str) -> str:
     return subprocess.run(["git", *args], cwd=ROOT, check=True, stdout=subprocess.PIPE, text=True).stdout
+
+
+def git_bytes(*args: str) -> bytes:
+    return subprocess.run(["git", *args], cwd=ROOT, check=True, stdout=subprocess.PIPE).stdout
+
+
+def boot_history(payload: Path) -> str:
+    """sha256 of every version of each boot file ever shipped, one per line.
+
+    The update replaces a boot file on a Deck only if it is one of these;
+    any other content was changed on that Deck and is kept.
+    """
+    lines = []
+    for path in sorted((payload / "EmberDeck" / "boot").rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(payload / "EmberDeck").as_posix()
+        hashes = set(EARLIER_BOOT_FILES.get(rel, set()))
+        hashes.add(hashlib.sha256(path.read_bytes()).hexdigest())
+        for commit in git("log", "--format=%H", "--", f"EmberEngine/{rel}").split():
+            try:
+                data = git_bytes("show", f"{commit}:EmberEngine/{rel}")
+            except subprocess.CalledProcessError:
+                continue  # the file was deleted in that commit
+            if b"\0" not in data:
+                data = data.replace(b"\r\n", b"\n")
+            hashes.add(hashlib.sha256(data).hexdigest())
+        lines += [f"{digest}  {rel}" for digest in sorted(hashes)]
+    return "\n".join(lines) + "\n"
 
 
 def copy_lf(source: Path, dest: Path) -> None:
@@ -63,12 +98,16 @@ def build(out: Path) -> Path:
         else:
             copy_lf(source, payload / "EmberDeck" / inner)
             program += 1
-    for name in TEST_KIT_FILES:
-        copy_lf(TEST_KIT / name, payload / "terminal-tests" / name)
     for name in ("install.sh", "install.py", "rollback.sh", "README.txt"):
         copy_lf(HERE / name, out / name)
+    copy_lf(ROOT / "tools" / "boot_set" / "install-boot-set.sh", out / "boot-set" / "install-boot-set.sh")
+    for name in ("CHANGELOG.md", "AWOO-SUPPORTER-SYSTEM.md"):   # what changed; supporter help
+        copy_lf(ROOT / name, out / name)
+    (payload / "boot-history.sha256").write_text(boot_history(payload), encoding="utf-8", newline="\n")
 
-    head = git("rev-parse", "--short", "HEAD").strip()
+    # The release tag when there is one (v3.0, or v3.0-4-g1a2b3c4 for later
+    # commits), otherwise the commit id.
+    head = git("describe", "--tags", "--always").strip()
     dirty = bool(git("status", "--porcelain", "--", "EmberEngine").strip())
     version = f"{head}{' + uncommitted changes' if dirty else ''} (built {time.strftime('%Y-%m-%d %H:%M')})"
     (out / "VERSION").write_text(version + "\n", encoding="utf-8", newline="\n")
@@ -78,8 +117,7 @@ def build(out: Path) -> Path:
         rel = path.relative_to(out).as_posix()
         lines.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {rel}")
     (out / "MANIFEST.sha256").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
-    print(f"{out}\n  {program} program files, {shipped} config templates, "
-          f"{len(TEST_KIT_FILES)} test-kit files\n  version {version}")
+    print(f"{out}\n  {program} program files, {shipped} config templates\n  version {version}")
     return out
 
 

@@ -253,7 +253,9 @@ class WilloWispTests(unittest.TestCase):
 
         bus = use_bus(self, willo_wisp)
         bus.set_array(willo_wisp.LED_FRAME_KEY, [0.5] * 8, "f32")
+        # The scripted show() outcomes are for the frame loop, not the start-up ignition.
         with mock.patch.dict(os.environ, {"CONFIG_PATH": ""}), \
+                mock.patch.dict(willo_wisp.DEFAULTS, {"ignition": False}), \
                 mock.patch.object(willo_wisp, "BlinkstickProRGBW", Strip), \
                 mock.patch.object(willo_wisp, "wait_for_led_config", lambda *a: (2, 50.0)), \
                 mock.patch.object(willo_wisp.signal, "signal"), \

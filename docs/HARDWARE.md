@@ -177,7 +177,13 @@ SEL4_LOOKUP = {
 
 ### Three-position selector
 
-The three-position selector uses GPIO 24 and GPIO 25. It publishes the current source or control context.
+The three-position selector uses GPIO 24 and GPIO 25. It publishes the current source or control context, which decides what the four-position selector does:
+
+| Position | Value | Four-position selector |
+|:--|:--|:--|
+| Left | 1 | Panel page: 1 Now Playing, 2 Scope, 3 Track Info, 4 Console |
+| Centre | 2 | Scope page visualiser (and shows the Scope page): 1 phosphor oscilloscope, 2 peak-hold bars, 3 spectrogram, 4 Awoo radial |
+| Right | 3 | LED strip animation (Tape) |
 
 ```python
 SEL3_LOOKUP = {

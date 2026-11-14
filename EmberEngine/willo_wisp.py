@@ -23,6 +23,7 @@ import numpy as np
 from typing import Any
 from pathlib import Path
 
+import ignition
 import synapse as bus  # shared memory helper
 from blinkstick_rgbw import BlinkstickProRGBW
 
@@ -41,7 +42,13 @@ DEFAULTS = dict(
     usb_current_ma=400,
     external_power=False,
     data_channel=0,
+    # Play the awoo-colour start-up animation (ignition.py) once the strip
+    # connects, before the first audio frame.
+    ignition=True,
 )
+CONTROL_BRIGHTNESS_KEY = "/io/in/control/brightness"
+# Before Pawprint has published the brightness knob (very early in a boot).
+IGNITION_DEFAULT_BRIGHTNESS = 0.7
     
 def load_cfg() -> dict[str, Any]:
     """Load YAML config for this instance."""
@@ -84,6 +91,30 @@ def rgba_to_rgbw(rgba: np.ndarray) -> np.ndarray:
     out = np.concatenate([rgb_wo_white, w], axis=1)  # [N,4]
     out = np.rint(out * 255.0).astype(np.uint8)
     return out
+
+
+def play_ignition(strip, led_count: int, fps: float, heartbeat, should_stop) -> None:
+    """Play the start-up animation on the strip, following the brightness knob.
+
+    A write failure simply ends it: the frame loop that follows owns
+    reconnecting and reporting faults.
+    """
+    brightness = float(np.clip(bus.get_float(CONTROL_BRIGHTNESS_KEY, IGNITION_DEFAULT_BRIGHTNESS), 0.0, 1.0))
+    interval = 1.0 / max(1.0, float(fps))
+    for rgba in ignition.frames(led_count, fps, brightness):
+        if should_stop():
+            return
+        started = time.monotonic()
+        heartbeat.tick(started)
+        for idx, (r, g, b, w) in enumerate(rgba_to_rgbw(rgba)):
+            strip.set_pixel(idx, (int(r), int(g), int(b), int(w)))
+        try:
+            strip.show()
+        except Exception:
+            return
+        remaining = interval - (time.monotonic() - started)
+        if remaining > 0:
+            time.sleep(remaining)
 
 
 # ----------------- led config via Synapse ----------------- #
@@ -195,6 +226,9 @@ def main():
             "external_power": external,
             "data_channel": data_channel,
         })
+
+        if bool(cfg.get("ignition", True)):
+            play_ignition(strip, led_count, fps, heartbeat, lambda: stopping)
 
         frame_len = led_count * 4
         frame_interval = 1.0 / fps

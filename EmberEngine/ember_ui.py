@@ -11,6 +11,7 @@ At every other source-selector position the UI keeps its last selected page.
 """
 from __future__ import annotations
 
+import asyncio
 import math
 import json
 import os
@@ -26,11 +27,13 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+import crt_transition
 import dot_matrix
 import kitty_graphics
 import synapse as bus
 from spirit_messages import DEFAULT_ROLE_STYLES
 from runtime_config import load_yaml_mapping
+import panel_visualisers
 from scope_phosphor import PhosphorScope
 
 try:
@@ -88,6 +91,14 @@ DEFAULTS = {
     # (rewrite the existing image in place; lighter, but not yet proven).
     "scope_pixel_fps": 30.0,
     "scope_image_update": "replace",
+    # The Scope page's visualiser until the selectors choose one (source
+    # selector centre + the 4-way): scope, bars, spectrogram or radial.
+    "scope_visualiser": "scope",
+    # Supporter feature: a CRT switch-off/switch-on between pages, when a
+    # valid Awoo supporter licence is installed (AWOO-SUPPORTER-SYSTEM.md).
+    # Without one, pages change instantly as they always have.
+    "page_transitions": True,
+    "supporter_licence_path": "~/.config/awoo/supporter.licence",
 }
 
 from contracts import (  # noqa: E402
@@ -173,6 +184,8 @@ LARGE_LYRIC_MIN_ROWS = 4
 LARGE_LYRIC_MIN_CHARS = 48
 # kitty image id for the Scope page (any 24-bit value not used elsewhere).
 SCOPE_IMAGE_ID = 0xEB5C01
+# kitty image id for the Now Playing cover.
+ART_IMAGE_ID = 0xEB5C02
 CONSOLE_STATUS_DEFAULT_LINES = 3
 
 PAGES = ("now", "scope", "info", "console")
@@ -191,6 +204,10 @@ HEARTBEAT_SERVICES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("COLOUR", ("aurora",)),
     ("BUS", ("whisper_daemon",)),
 )
+# Labels and secondary text: a slightly dimmer cream than the values beside
+# them (the panel text is a warm white), still easy to read on the panel.
+# Never Rich's "dim", which halves the colour and turned labels brown.
+LABEL_STYLE = "#cbc1ac"
 HEALTH_STYLES = {"ok": "bold #6fcf6f", "late": "bold #e0a040", "dead": "bold #e85050"}
 PANEL_TITLES = {
     "now-metadata": "NOW PLAYING",
@@ -346,6 +363,17 @@ PAGE_BY_SELECTOR = {
     4: "console",
 }
 
+# The source selector's centre position chooses the Scope page's visualiser
+# with the same 4-way selector, and shows the Scope page while it is there.
+SCOPE_VISUALISER_SELECTOR_POSITION = 2
+VISUALISER_BY_SELECTOR = {
+    1: "scope",
+    2: "bars",
+    3: "spectrogram",
+    4: "radial",
+}
+VISUALISERS = tuple(VISUALISER_BY_SELECTOR.values())
+
 def _n_a(value: object) -> str:
     """Return display text, substituting N/A for empty values."""
     text = str(value or "").strip()
@@ -400,6 +428,27 @@ DISCORD_STATUS_TEXT = {
     DISCORD_STATUS_RECONNECTING: "Reconnecting",
     DISCORD_STATUS_ERROR: "Error",
 }
+
+
+def supporter_status(licence_path: object) -> Tuple[bool, str]:
+    """(licensed, reason) for the Awoo supporter licence at ``licence_path``.
+
+    Verified offline with awoo_supporter.py; any problem (no file, a bad
+    signature, the cryptography package missing) simply means "not
+    licensed". The reason is a short phrase for the console, never the
+    licence itself.
+    """
+    try:
+        import awoo_supporter
+    except Exception:
+        return False, "verifier unavailable"
+    try:
+        awoo_supporter.verify_licence(awoo_supporter.read_licence_file(Path(str(licence_path))))
+    except awoo_supporter.LicenceError as exc:
+        return False, awoo_supporter.describe(exc.reason)
+    except Exception:
+        return False, "the supporter licence could not be checked"
+    return True, "licensed"
 
 
 def discord_status_lines() -> List[str]:
@@ -624,11 +673,11 @@ def key_value_block(
     present = [(label, _n_a(value)) for label, value in rows if known(value)]
     label_w = max((len(label) for label, _ in present), default=0)
     for label, value in present:
-        line = Text(f"{label:<{label_w}} ", style="dim")
+        line = Text(f"{label:<{label_w}} ", style=LABEL_STYLE)
         line.append(value)
         lines.append(fit_line(line, width))
     if not lines:
-        lines.append(Text("Not reported by this source", style="dim"))
+        lines.append(Text("Not reported by this source", style=LABEL_STYLE))
     return Text("\n").join(lines[:max(1, int(height))])
 
 
@@ -647,6 +696,39 @@ def _text_palette_roles(
     roles = list(colours[:4])
     roles.extend(DEFAULT_TEXT_PALETTE[len(roles):])
     return tuple(roles)
+
+
+def now_playing_details(meta: dict, width: int, height: int, light: Tuple[int, int, int]) -> List[Text]:
+    """Spend spare panel rows on large type; retain normal text on small grids.
+
+    Reserve two rows for progress/time. Large glyphs are used only when the
+    whole field fits, so long names and unsupported scripts keep normal text.
+    """
+    if height < 10:
+        title = wrap_words_cells(meta["title"], width, 2 if height >= 6 else 1) or ["N/A"]
+        lines = [Text(row, style=f"bold {rgb_style(light)}") for row in title]
+        for field in ("artist", "album"):
+            if height >= len(lines) + 4:
+                lines.append(fit_line(Text(_n_a(meta[field])), width))
+        if height >= len(lines) + 3:
+            lines.append(Text(""))
+        return lines
+
+    lines: List[Text] = []
+    fields = ("title", "artist", "album")
+    for index, field in enumerate(fields):
+        # Keep one row plus a gap for each later field, and progress + time.
+        available = height - 3 - len(lines) - (2 - index) * 2
+        value = _n_a(meta[field])
+        large = dot_matrix.render_lines(value, width, min(3, available // 2)) if available >= 2 else None
+        style = f"bold {rgb_style(light)}" if field == "title" else ""
+        rows = [row for pair in large for row in pair] if large else (wrap_words_cells(value, width, min(2, max(1, available))) or ["N/A"])
+        lines.extend(Text(row, style=style) for row in rows)
+        if index < 2:
+            lines.append(Text(""))
+    # The progress bar has a stable home at the foot of the panel.
+    lines.extend(Text("") for _ in range(max(0, height - 2 - len(lines))))
+    return lines
 
 
 def large_lyrics_fit(width: int, height: int) -> bool:
@@ -922,11 +1004,37 @@ ART_BUS_HEIGHT = 48
 ART_BUS_BYTES = ART_BUS_WIDTH * ART_BUS_HEIGHT * 3
 
 
+PANEL_ART_SIZE = 320  # Minstrel's full cover segment (minstrel.PANEL_ART_SIZE)
+PANEL_ART_BYTES = PANEL_ART_SIZE * PANEL_ART_SIZE * 3
+
+
+def read_panel_art() -> Optional[np.ndarray]:
+    """Minstrel's full Plex cover (up to 320 x 320), or None if it has none."""
+    size = bus.get_int("/plex/art_panel_size", 0)
+    if not 1 <= size <= PANEL_ART_SIZE:
+        return None
+    try:
+        data = bus.try_get_bytes("/plex/art_panel_rgb", PANEL_ART_BYTES)
+    except Exception:  # any trouble here: the small mosaic is still there
+        return None
+    if data is None or len(data) < PANEL_ART_BYTES:
+        return None
+    canvas = np.frombuffer(data, dtype=np.uint8).reshape(PANEL_ART_SIZE, PANEL_ART_SIZE, 3)
+    return canvas[:size, :size].copy()
+
+
 def read_album_art(source: int) -> Optional[np.ndarray]:
-    """Read Plex or generic-MPRIS small RGB cover mosaic safely."""
+    """The best cover there is: Plex's full cover, else the small RGB mosaic."""
     prefix = "/plex" if source == SOURCE_PLEX else "/mpris" if source == SOURCE_LOCAL else ""
     if not prefix or bus.get_int(f"{prefix}/art_valid", 0) != 1:
         return None
+    if source == SOURCE_PLEX:
+        try:
+            full = read_panel_art()
+        except Exception:
+            full = None
+        if full is not None:
+            return full
     width = bus.get_int(f"{prefix}/art_width", 0)
     height = bus.get_int(f"{prefix}/art_height", 0)
     if not (1 <= width <= ART_BUS_WIDTH and 1 <= height <= ART_BUS_HEIGHT):
@@ -1161,13 +1269,19 @@ class LogTail:
 
 
 class ScopeWidget(Widget):
-    """Phosphor oscilloscope, drawn in pixels by kitty from Echo's waveform.
+    """The Scope page's visualiser, drawn in pixels by kitty.
+
+    One of four, chosen with the selectors (``VISUALISER_BY_SELECTOR``): the
+    phosphor oscilloscope from Echo's waveform (scope_phosphor.py), or the
+    peak-hold bars, spectrogram or Awoo radial from Echo's spectrum
+    (panel_visualisers.py). Each keeps its own state, so switching away and
+    back does not reset it.
 
     The widget's own text is kitty image placeholders (kitty_graphics.py),
     which only change when the widget is resized, so Textual does not redraw
-    anything while the trace moves. Each frame is rendered by
-    scope_phosphor.PhosphorScope and written to the terminal as a graphics
-    command, no faster than ``fps``. Outside kitty the panel says so.
+    anything while the picture moves. Each frame is written to the terminal
+    as a graphics command, no faster than ``fps``. Outside kitty the panel
+    says so.
     """
 
     DEFAULT_CSS = """
@@ -1179,12 +1293,14 @@ class ScopeWidget(Widget):
         super().__init__(**kwargs)
         self.kitty = kitty_graphics.is_kitty()
         self.image_id = image_id
-        self.renderer = PhosphorScope()
+        self.visualiser = "scope"
+        self.renderers: Dict[str, object] = {"scope": PhosphorScope()}
         self.fps = 30.0
         self.update_mode = "replace"
         self._stream: Optional[kitty_graphics.ImageStream] = None
         self._cell_px: Optional[Tuple[int, int]] = None
         self._last_frame_at = 0.0
+        self._history_px: Optional[Tuple[int, int]] = None
 
     def configure(self, fps: float, update_mode: str) -> None:
         """Apply the UI configuration's frame rate and image update mode."""
@@ -1200,7 +1316,7 @@ class ScopeWidget(Widget):
         """Placeholders kitty replaces with the image, or a notice elsewhere."""
         if not self.kitty:
             return Text("The scope is drawn by the kitty terminal; this terminal cannot show it.",
-                        style="italic #8f5f50")
+                        style="italic #d8d3c8")
         width, height = self.size.width, self.size.height
         r, g, b = kitty_graphics.id_colour(self.image_id)
         return Text("\n".join(kitty_graphics.placeholder_rows(width, height)), style=f"rgb({r},{g},{b})")
@@ -1211,24 +1327,70 @@ class ScopeWidget(Widget):
         if self._stream is not None:
             self._stream.reset()
 
-    def set_waveform(self, values: Sequence[float], colour: Tuple[int, int, int]) -> None:
-        """Draw and send one frame, at most ``fps`` times a second."""
+    @property
+    def renderer(self):
+        """The selected visualiser's renderer, created the first time it is used."""
+        if self.visualiser not in self.renderers:
+            cls = panel_visualisers.VISUALISERS[self.visualiser]
+            # Bars and radial fall and decay per frame drawn, so they need the frame rate.
+            self.renderers[self.visualiser] = cls() if cls is panel_visualisers.Spectrogram else cls(self.fps)
+        return self.renderers[self.visualiser]
+
+    def set_visualiser(self, name: str) -> None:
+        """Switch visualiser; the next frame is drawn straight away."""
+        if name in VISUALISERS and name != self.visualiser:
+            self.visualiser = name
+            self._last_frame_at = 0.0
+
+    @property
+    def wants_spectrum(self) -> bool:
+        return self.visualiser != "scope"
+
+    def _pixel_size(self, cols: int, rows: int) -> Tuple[int, int]:
+        if self._cell_px is None:
+            self._cell_px = kitty_graphics.cell_pixels() or (8, 16)
+        return cols * self._cell_px[0], rows * self._cell_px[1]
+
+    def draw(
+        self,
+        waveform: Sequence[float],
+        spectrum: Optional[Sequence[float]],
+        palette: Sequence[Tuple[int, int, int]],
+    ) -> None:
+        """Called at the Scope page's refresh rate; sends a frame at most
+        ``fps`` times a second. The spectrogram takes the spectrum on every
+        call and scrolls by the clock, shown or hidden."""
         if not self.kitty:
-            return
-        now = time.monotonic()
-        if now - self._last_frame_at < 1.0 / self.fps:
             return
         cols, rows = self.size.width, self.size.height
         if cols < 2 or rows < 2:
             return
+        if self.wants_spectrum and spectrum is None:
+            return  # Echo is not publishing yet: draw nothing rather than guess
+        size = self._pixel_size(cols, rows)
+        self._history_px = size
+        now = time.monotonic()
+        if self.visualiser == "spectrogram":
+            self.renderer.add(spectrum, size[1], size[0], now)
+        if now - self._last_frame_at < 1.0 / self.fps:
+            return
         self._last_frame_at = now
-        if self._cell_px is None:
-            self._cell_px = kitty_graphics.cell_pixels() or (8, 16)
         if self._stream is None or self._stream.mode != self.update_mode:
             self._stream = kitty_graphics.ImageStream(self._write, self.image_id, self.update_mode)
-        cell_w, cell_h = self._cell_px
-        frame = self.renderer.render(values, colour, (cols * cell_w, rows * cell_h))
+        if self.visualiser == "scope":
+            frame = self.renderer.render(waveform, size, palette)
+        elif self.visualiser == "spectrogram":
+            frame = self.renderer.paint(palette)
+        else:
+            frame = self.renderer.render(spectrum, size, palette)
         self._stream.send(frame, cols, rows)
+
+    def feed_history(self, spectrum: Sequence[float]) -> None:
+        """Keep the spectrogram's history moving while the page is hidden,
+        at the size it was last shown (nothing until it has been shown)."""
+        if self.visualiser == "spectrogram" and self._history_px is not None:
+            width, height = self._history_px
+            self.renderer.add(spectrum, height, width, time.monotonic())
 
     def on_unmount(self) -> None:
         """Remove the image from the terminal when the UI closes."""
@@ -1237,23 +1399,30 @@ class ScopeWidget(Widget):
 
 
 class AlbumArtWidget(Widget):
-    """Render real Plex or generic-MPRIS cover pixels using terminal glyphs.
+    """The album cover on Now Playing.
 
-    Each ``▀`` cell carries one RGB foreground pixel and one RGB background
-    pixel. It is modest by desktop standards, but it is actual album art and
-    works in LXTerminal without a non-standard image protocol.
+    In kitty the cover is real pixels: the widget's text is kitty image
+    placeholders and the cover image is sent once per cover (or resize),
+    sized to the panel and kept square. In any other terminal each ``▀``
+    cell carries two cover pixels, as before. Without a cover it shows a
+    texture in the album palette.
     """
 
     DEFAULT_CSS = """
     AlbumArtWidget { overflow: hidden hidden; background: #0d0506; }
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, image_id: int = ART_IMAGE_ID, **kwargs) -> None:
         """Initialize configuration, dependencies, and runtime state."""
         super().__init__(**kwargs)
         self.cover: Optional[np.ndarray] = None
         self.palette: List[Tuple[int, int, int]] = [(70, 70, 70)] * 4
         self._sequence: object = -1
+        self.kitty = kitty_graphics.is_kitty()
+        self.image_id = image_id
+        self._stream: Optional[kitty_graphics.ImageStream] = None
+        self._sent: Optional[Tuple[object, int, int]] = None
+        self._cell_px: Optional[Tuple[int, int]] = None
 
     def set_art_context(
         self,
@@ -1268,7 +1437,49 @@ class AlbumArtWidget(Widget):
         self._sequence = sequence
         self.cover = None if cover is None else np.asarray(cover, dtype=np.uint8).copy()
         self.palette = palette
+        self._sent = None  # until this cover reaches kitty, draw it with half blocks
+        self._send_cover()
         self.refresh()
+
+    def on_resize(self, event) -> None:
+        """New size: measure cells again and send the cover at the new size."""
+        self._cell_px = None
+        self._send_cover()
+
+    def _write(self, data: str) -> None:
+        driver = getattr(self.app, "_driver", None)
+        if driver is not None:
+            driver.write(data)
+
+    def cover_pixels(self, width_px: int, height_px: int) -> np.ndarray:
+        """The cover fitted square and centred in the panel's pixel area."""
+        from PIL import Image
+        assert self.cover is not None
+        side = max(1, min(width_px, height_px))
+        source = Image.fromarray(self.cover)
+        resample = Image.LANCZOS if source.width >= side else Image.BICUBIC
+        cover = source.resize((side, side), resample)
+        frame = Image.new("RGB", (width_px, height_px), (13, 5, 6))
+        frame.paste(cover, ((width_px - side) // 2, (height_px - side) // 2))
+        return np.asarray(frame, dtype=np.uint8)
+
+    def _send_cover(self) -> None:
+        if not self.kitty or self.cover is None:
+            return
+        cols, rows = self.size.width, self.size.height
+        if cols < 1 or rows < 1 or (self._sequence, cols, rows) == self._sent:
+            return
+        if self._cell_px is None:
+            self._cell_px = kitty_graphics.cell_pixels() or (8, 16)
+        if self._stream is None:
+            self._stream = kitty_graphics.ImageStream(self._write, self.image_id, "replace")
+        try:
+            pixels = self.cover_pixels(cols * self._cell_px[0], rows * self._cell_px[1])
+        except Exception:
+            return  # without Pillow the half-block cover still works below
+        self._stream.send(pixels, cols, rows)
+        self._sent = (self._sequence, cols, rows)
+        self.refresh()  # swap the half-block cover for the placeholders
 
     def _render_cover(self, width: int, height: int) -> Text:
         """Render cover."""
@@ -1308,7 +1519,17 @@ class AlbumArtWidget(Widget):
         """Return the render result."""
         width = max(1, self.size.width)
         height = max(1, self.size.height)
-        return self._render_cover(width, height) if self.cover is not None else self._render_fallback(width, height)
+        if self.cover is None:
+            return self._render_fallback(width, height)
+        if self.kitty and self._sent is not None:
+            r, g, b = kitty_graphics.id_colour(self.image_id)
+            return Text("\n".join(kitty_graphics.placeholder_rows(width, height)), style=f"rgb({r},{g},{b})")
+        return self._render_cover(width, height)
+
+    def on_unmount(self) -> None:
+        """Remove the cover image from the terminal when the UI closes."""
+        if self._stream is not None:
+            self._stream.delete()
 
 
 class EmberUI(App[None]):
@@ -1319,7 +1540,7 @@ class EmberUI(App[None]):
        Actual rectangles are calculated from the live terminal viewport. */
     Screen {
         background: #090204;
-        color: #e8c9a4;
+        color: #f8f3e8;
         overflow: hidden hidden;
         layers: frame pages overlay;
     }
@@ -1334,7 +1555,7 @@ class EmberUI(App[None]):
         /* Panel headings live in the border, so they cost no text rows. */
         border-title-align: left;
         border-title-style: bold;
-        border-title-color: #e8c9a4;
+        border-title-color: #f8f3e8;
     }
     #global-time, #global-date { text-align: right; }
     #safe-frame {
@@ -1346,8 +1567,8 @@ class EmberUI(App[None]):
         background: transparent;
         layer: frame;
     }
-    .micro { color: #8f5f50; }
-    .label { color: #bd7752; }
+    .micro { color: #d8d3c8; }
+    .label { color: #e5dfd3; }
     #global-root {
         position: absolute;
         offset: 0 0;
@@ -1401,6 +1622,15 @@ class EmberUI(App[None]):
         self._dead_art_since: Optional[float] = None
         self._text_cache: Dict[str, str] = {}
         self._console_status_lines = CONSOLE_STATUS_DEFAULT_LINES
+        licence_path = Path(str(cfg.get("supporter_licence_path", DEFAULTS["supporter_licence_path"]))).expanduser()
+        self.supporter, self.supporter_reason = supporter_status(licence_path)
+        self._licence_present = licence_path.is_file()
+        self.transitions = (
+            self.supporter and bool(cfg.get("page_transitions", True)) and kitty_graphics.is_kitty()
+        )
+        self._crt: Optional[crt_transition.CrtTransition] = None
+        self._transition_running = False
+        self._pending_page: Optional[str] = None
         self.layout_plan = compute_layout(80, 30, int(cfg.get("safe_margin_cells", 1)), self.page)
         log_path = Path(str(cfg["log_path"]))
         if not log_path.is_absolute():
@@ -1444,9 +1674,14 @@ class EmberUI(App[None]):
         """Handle the on mount lifecycle step."""
         for widget_id, title in PANEL_TITLES.items():
             self.query_one(f"#{widget_id}").border_title = title
-        self.query_one("#scope-wave", ScopeWidget).configure(
+        scope = self.query_one("#scope-wave", ScopeWidget)
+        scope.configure(
             float(self.cfg.get("scope_pixel_fps", 30.0)), str(self.cfg.get("scope_image_update", "replace"))
         )
+        scope.set_visualiser(str(self.cfg.get("scope_visualiser", "scope")))
+        if self.transitions:
+            self._crt = crt_transition.CrtTransition(self._write_terminal)
+            self._prepare_transition()
         self._set_page("now")
         interval = 1.0 / max(2, int(self.cfg.get("update_hz", 20)))
         self.set_interval(interval, self.refresh_frame)
@@ -1506,14 +1741,16 @@ class EmberUI(App[None]):
         panel_rgb = self._mix_colour((13, 7, 7), accent, 0.07)
         header_rgb = self._mix_colour((16, 8, 8), accent, 0.10)
         border_rgb = self._mix_colour((125, 57, 32), accent, 0.44)
-        text_rgb = self._mix_colour((236, 210, 174), accent, 0.04)
+        text_rgb = self._mix_colour((248, 243, 232), accent, 0.02)
+        # Text must remain legible when the lighting knob is turned down.
+        text_level = 0.90 + control * 0.10
 
         self.screen.styles.background = self._scaled_colour(screen_rgb, screen_level)
-        self.screen.styles.color = self._scaled_colour(text_rgb, level)
+        self.screen.styles.color = self._scaled_colour(text_rgb, text_level)
 
         panel_colour = self._scaled_colour(panel_rgb, surface_level)
         border_colour = self._scaled_colour(border_rgb, level)
-        title_colour = self._scaled_colour(self._mix_colour(text_rgb, accent, 0.35), level)
+        title_colour = self._scaled_colour(self._mix_colour(text_rgb, accent, 0.10), text_level)
         for panel in self.query(".panel"):
             panel.styles.background = panel_colour
             panel.styles.border = ("round", border_colour)
@@ -1589,16 +1826,66 @@ class EmberUI(App[None]):
         """Handle the on resize lifecycle step."""
         if self.is_mounted:
             self._apply_adaptive_layout()
+            self._prepare_transition()
+
+    def _write_terminal(self, data: str) -> None:
+        driver = getattr(self, "_driver", None)
+        if driver is not None:
+            driver.write(data)
+
+    def _prepare_transition(self) -> None:
+        """Render and upload the CRT frames for the current window size."""
+        if self._crt is not None and not self._transition_running:
+            cell = kitty_graphics.cell_pixels() or (8, 16)
+            self._crt.prepare(int(self.size.width), int(self.size.height), cell)
 
     def _update_page_from_selectors(self) -> None:
-        """Follow the 4-way selector only when source selector is in UI mode."""
+        """Follow the 4-way selector: pages in UI mode, visualisers in the centre."""
         source_position = bus.get_int("/io/in/selector/source_selector", -1)
         page_position = bus.get_int("/io/in/selector/visualiser_mode", -1)
-        if source_position != UI_SOURCE_SELECTOR_POSITION:
+        if source_position == SCOPE_VISUALISER_SELECTOR_POSITION:
+            visualiser = VISUALISER_BY_SELECTOR.get(page_position)
+            if visualiser is None:
+                return
+            self.query_one("#scope-wave", ScopeWidget).set_visualiser(visualiser)
+            page = "scope"
+        elif source_position == UI_SOURCE_SELECTOR_POSITION:
+            page = PAGE_BY_SELECTOR.get(page_position)
+            if page is None:
+                return
+        else:
             return
-        page = PAGE_BY_SELECTOR.get(page_position)
-        if page is not None and page != self.page:
-            self._set_page(page)
+        if self._transition_running:
+            self._pending_page = page
+        elif page != self.page:
+            if self._crt is not None and self._crt.count:
+                self._transition_running = True
+                self.run_worker(self._crt_to(page), exclusive=True, group="transition")
+            else:
+                self._set_page(page)
+
+    async def _crt_to(self, page: str) -> None:
+        """Switch off, change page behind the black screen, switch on."""
+        crt = self._crt
+        shown = None
+        try:
+            for index in range(crt.count):
+                hide = crt.hide(shown) if shown is not None else ""
+                self._write_terminal(crt.place(index) + hide)
+                shown = index
+                if index == crt.hold:
+                    self._set_page(page)
+                    await asyncio.sleep(crt_transition.HOLD_S)
+                else:
+                    await asyncio.sleep(crt_transition.FRAME_S)
+        finally:
+            if shown is not None:
+                self._write_terminal(crt.hide(shown))
+            self._transition_running = False
+        pending, self._pending_page = self._pending_page, None
+        if pending is not None and pending != self.page:
+            self._transition_running = True
+            self.run_worker(self._crt_to(pending), exclusive=True, group="transition")
 
     def _set_page(self, page: str) -> None:
         """Show one page. The header differs on Now Playing, so lay out again;
@@ -1612,6 +1899,8 @@ class EmberUI(App[None]):
     def on_unmount(self) -> None:
         """Handle the on unmount lifecycle step."""
         self.system_probe.close()
+        if self._crt is not None:
+            self._crt.release()
 
     @staticmethod
     def _due(now: float, last: float, hz: float) -> bool:
@@ -1701,6 +1990,8 @@ class EmberUI(App[None]):
             return
 
         new_art = read_album_art(source)
+        if prefix and bus.get_int(f"{prefix}/art_seq", -1) != seq[1]:
+            return  # Minstrel replaced the cover while it was read: try again shortly
         if new_art is None and self._album_art is not None:
             if self._dead_art_seq != seq or self._dead_art_since is None:
                 self._dead_art_seq = seq
@@ -1732,7 +2023,7 @@ class EmberUI(App[None]):
                 stamp = bus.get_int(f"/proc/{name}/heartbeat_ms", 0)
                 ages.append(bus.elapsed_ms(now_ms, stamp) / 1000.0 if stamp else math.inf)
             age = max(ages)
-            token = Text(f"{label} ", style="dim")
+            token = Text(f"{label} ", style=LABEL_STYLE)
             if age < 3.0:
                 token.append("●", style=HEALTH_STYLES["ok"])
             elif age < 10.0:
@@ -1754,7 +2045,7 @@ class EmberUI(App[None]):
             text = _n_a(value)
             if scroll_w:
                 text = marquee_terminal_cells(text, scroll_w, now=now, step_s=step_s)
-            rendered = Text(f"{label} ", style="dim")
+            rendered = Text(f"{label} ", style=LABEL_STYLE)
             rendered.append(text)
             return rendered
 
@@ -1768,13 +2059,15 @@ class EmberUI(App[None]):
         for line in discord_status_lines():
             _label, _, value = line.partition(": ")
             tokens.append(token("RP", value.strip(), 20))
+        if self._licence_present:
+            tokens.append(token("SUPPORTER", "✓" if self.supporter else self.supporter_reason, 24))
         return tokens
 
     def _control_tokens(self) -> List[Text]:
         """Show Pawprint's mapped semantic controls, not raw ADC voltages."""
         tokens = []
         for label, name in (("BRIGHT", "brightness"), ("GAIN", "gain"), ("COLOUR", "colour"), ("SAT", "saturation")):
-            token = Text(f"{label} ", style="dim")
+            token = Text(f"{label} ", style=LABEL_STYLE)
             token.append(f"{clamp01(bus.get_float(f'/io/in/control/{name}', 0.0)):.2f}")
             tokens.append(token)
         return tokens
@@ -1811,6 +2104,23 @@ class EmberUI(App[None]):
             if self._due(now, self._last_console_at, self.cfg.get("console_refresh_hz", 2.0)):
                 self._last_console_at = now
                 self._update_console()
+
+        if self.page != "scope":
+            self._feed_hidden_spectrogram(now)
+
+    def _feed_hidden_spectrogram(self, now: float) -> None:
+        """The spectrogram is a history: keep it moving while its page is
+        hidden, so it is full when the page comes back. The other
+        visualisers need nothing while hidden."""
+        scope = self.query_one("#scope-wave", ScopeWidget)
+        if scope.visualiser != "spectrogram":
+            return
+        if not self._due(now, self._last_scope_at, self.cfg.get("scope_refresh_hz", 15.0)):
+            return
+        self._last_scope_at = now
+        spectrum = self._read_spectrum()
+        if spectrum is not None:
+            scope.feed_history(spectrum)
 
     def _update_global(self, meta: dict, source: int, play_state: int, colours: Sequence[Tuple[int, int, int]]) -> None:
         """Header: two single-line rows that never wrap at any grid size."""
@@ -1849,7 +2159,7 @@ class EmberUI(App[None]):
             self.query_one("#global-artist", Static).update(
                 fit_line(Text(context or source_name(source)), plan.span("global-artist")))
             self.query_one("#global-album", Static).update(
-                fit_line(Text(audio, style="dim"), plan.span("global-album")))
+                fit_line(Text(audio, style=LABEL_STYLE), plan.span("global-album")))
         else:
             self.query_one("#global-artist", Static).update(
                 fit_line(Text(_n_a(meta["artist"]), style="bold"), plan.span("global-artist")))
@@ -1877,19 +2187,12 @@ class EmberUI(App[None]):
         lyric_context: Tuple[str, str, str],
         colours: Sequence[Tuple[int, int, int]],
     ) -> None:
-        """Title, artist, album and progress, centred beside the cover."""
+        """Large track details with progress anchored below, beside the cover."""
         plan = self.layout_plan
         width, height = plan.inner("now-metadata")
         _dominant, _accent, _dark, light = _text_palette_roles(colours)
 
-        title_rows = wrap_words_cells(meta["title"], width, 2 if height >= 6 else 1) or ["N/A"]
-        lines: List[Text] = [Text(row, style=f"bold {rgb_style(light)}") for row in title_rows]
-        if height >= len(lines) + 4:
-            lines.append(fit_line(Text(_n_a(meta["artist"])), width))
-        if height >= len(lines) + 4:
-            lines.append(fit_line(Text(_n_a(meta["album"])), width))
-        if height >= len(lines) + 3:
-            lines.append(Text(""))
+        lines = now_playing_details(meta, width, height, light)
         lines.append(palette_progress_bar(meta["position"], meta["duration"], width, colours))
         elapsed = f"{fmt_time(meta['position'])} / {fmt_time(meta['duration'])}"
         remaining = ""
@@ -1898,10 +2201,10 @@ class EmberUI(App[None]):
         times = Text(elapsed)
         if remaining and cell_len(elapsed) + 1 + cell_len(remaining) <= width:
             times.append(" " * (width - cell_len(elapsed) - cell_len(remaining)))
-            times.append(remaining, style="dim")
+            times.append(remaining, style=LABEL_STYLE)
         lines.append(times)
         lines = lines[-height:]
-        body = Text("\n" * ((height - len(lines)) // 2))
+        body = Text("")
         body.append_text(Text("\n").join(lines))
         self.query_one("#now-metadata", Static).update(body)
 
@@ -1932,8 +2235,18 @@ class EmberUI(App[None]):
             str(self.cfg.get("waveform_key", "/audio/waveform")),
             int(self.cfg.get("waveform_samples", 160)), dtype="f32",
         ) or [0.0] * int(self.cfg.get("waveform_samples", 160))
-        self.query_one("#scope-wave", ScopeWidget).set_waveform(waveform, colours[1])
+        scope = self.query_one("#scope-wave", ScopeWidget)
+        spectrum = self._read_spectrum() if scope.wants_spectrum else None
+        scope.draw(waveform, spectrum, colours)
         self._update_lyrics("scope-lyrics", lyric_context, colours)
+
+    @staticmethod
+    def _read_spectrum() -> Optional[List[float]]:
+        """Echo's latest spectrum, or None before Echo has published one."""
+        bins = bus.get_int("/audio/bins", 1025)
+        if bins < 2:
+            return None
+        return bus.try_get_array("/audio/spectrum", bins, dtype="f32")
 
     def _update_info(self, meta: dict) -> None:
         """Four labelled lists. Fields the source does not report are left out,

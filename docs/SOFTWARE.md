@@ -107,7 +107,9 @@ For physical controls, Pawprint also publishes quiet diagnostic counters under `
 
 ## Diagnostic tools
 
-- `ember_ui.py` displays media, system state and structured logs. `dot_matrix.py` draws its large lyric line as Braille-dot capitals. `scope_phosphor.py` draws the Scope page's oscilloscope as pixels and `kitty_graphics.py` shows them through kitty's graphics protocol (image placeholders, so Textual's layout is unaffected). `launch_ember_ui.sh` opens the UI in kitty with `kitty-panel.conf`; `panel_terminal.py` reads the LXTerminal profile's font and Labwc's window rules for it.
+- `ember_ui.py` displays media, system state and structured logs. `dot_matrix.py` draws its large lyric line as Braille-dot capitals. `scope_phosphor.py` draws the Scope page's oscilloscope and `panel_visualisers.py` its other three visualisers (peak-hold bars, spectrogram, Awoo radial) as pixels, and `kitty_graphics.py` shows them, and the Now Playing cover from Minstrel's `/plex/art_panel_rgb`, through kitty's graphics protocol (image placeholders, so Textual's layout is unaffected). `launch_ember_ui.sh` opens the UI in kitty with `kitty-panel.conf`; `panel_terminal.py` reads the LXTerminal profile's font and Labwc's window rules for it. `crt_transition.py` is the supporter page transition and `supporter_check.py` installs and checks the supporter code ([AWOO-SUPPORTER-SYSTEM.md](../AWOO-SUPPORTER-SYSTEM.md)).
+- `ignition.py` is the LED strip's start-up animation, played by Will-o'-Wisp when the strip connects.
+- The optional boot set (`tools/boot_set/install-boot-set.sh`) adds the Plymouth boot theme in `boot/plymouth/emberdeck` and `emberdeck-boot-lights.service`, which runs `boot_lights.py` (a running light on the graph LEDs) until Pawprint starts.
 - `ember_ui_probe.py` checks the data consumed by that UI.
 - `album_art_probe.py` exercises media and artwork presentation.
 - `lyrics_probe.py` inspects lyrics-related Plex streams.

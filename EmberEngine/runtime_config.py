@@ -294,7 +294,7 @@ def validate_foxfire(cfg: Mapping[str, Any]) -> None:
     _choice(component, cfg, "reducer", ("pctl", "max", "rms"))
 
 
-WILLO_WISP_KEYS = {"proc_name", "pixel_max_ma", "usb_current_ma", "external_power", "data_channel"}
+WILLO_WISP_KEYS = {"proc_name", "pixel_max_ma", "usb_current_ma", "external_power", "data_channel", "ignition"}
 
 
 def validate_willo_wisp(cfg: Mapping[str, Any]) -> None:
@@ -305,7 +305,7 @@ def validate_willo_wisp(cfg: Mapping[str, Any]) -> None:
     _numbers(component, cfg, ("usb_current_ma",), minimum=0.0)
     # Strictly boolean: bool("false") is True, which would silently disable
     # USB current limiting for a USB-powered strip.
-    _booleans(component, cfg, ("external_power",))
+    _booleans(component, cfg, ("external_power", "ignition"))
     _numbers(component, cfg, ("data_channel",), minimum=0, maximum=7, integer=True)
 
 
@@ -426,7 +426,8 @@ EMBER_UI_KEYS = {
     "system_refresh_s", "log_refresh_s", "log_path", "structured_log_path",
     "structured_log_required", "metadata_dead_grace_s", "art_dead_grace_s", "waveform_key",
     "waveform_samples", "safe_margin_cells", "diagnostics_scroll_step_s", "large_lyrics",
-    "scope_pixel_fps", "scope_image_update",
+    "scope_pixel_fps", "scope_image_update", "scope_visualiser", "page_transitions",
+    "supporter_licence_path",
 }
 
 
@@ -434,9 +435,9 @@ def validate_ember_ui(cfg: Mapping[str, Any]) -> None:
     """Ember UI schema. Used by the pre-deploy check; the UI is not a Foundry worker."""
     component = "ember_ui"
     _known(component, cfg, EMBER_UI_KEYS)
-    _texts(component, cfg, ("proc_name", "log_path", "structured_log_path"))
+    _texts(component, cfg, ("proc_name", "log_path", "structured_log_path", "supporter_licence_path"))
     _bus_keys(component, cfg, ("waveform_key",))
-    _booleans(component, cfg, ("structured_log_required", "large_lyrics"))
+    _booleans(component, cfg, ("structured_log_required", "large_lyrics", "page_transitions"))
     _numbers(component, cfg, ("logical_width", "logical_height", "waveform_samples"), minimum=16, integer=True)
     _numbers(component, cfg, ("safe_margin_cells",), minimum=0, integer=True)
     _numbers(component, cfg, (
@@ -448,6 +449,7 @@ def validate_ember_ui(cfg: Mapping[str, Any]) -> None:
                               "diagnostics_scroll_step_s"), minimum=0.0)
     _numbers(component, cfg, ("scope_pixel_fps",), minimum=1.0, maximum=60.0)
     _choice(component, cfg, "scope_image_update", ("replace", "edit"))
+    _choice(component, cfg, "scope_visualiser", ("scope", "bars", "spectrogram", "radial"))
 
 
 RICH_PRESENCE_KEYS = {"proc_name", "enabled", "discord", "presence"}

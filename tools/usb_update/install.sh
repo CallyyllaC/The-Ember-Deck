@@ -3,7 +3,7 @@
 #
 #     bash /media/$USER/<usb-name>/<this-folder>/install.sh
 #
-# 1. Installs kitty (the panel UI now needs it) if it is not there yet.
+# 1. Installs kitty (the panel UI runs in it) if it is not there yet.
 # 2. Hands over to install.py, which checks everything first, backs up
 #    ~/EmberDeck, copies the new code in without changing any config file,
 #    restarts the Deck and rolls itself back if the new version is unhealthy.

@@ -1,0 +1,78 @@
+# Ember Deck boot screen: the awoo logo over the awoo.ltd starfield.
+#
+# The static stars fill the screen; three twinkle layers breathe at different
+# rates; the crescent fades in, then the fox mask. Messages (for example a
+# file-system check) appear small at the bottom. Installed by tools/boot_set.
+
+Window.SetBackgroundTopColor(0.043, 0.043, 0.059);
+Window.SetBackgroundBottomColor(0.043, 0.043, 0.059);
+
+screen_x = Window.GetX();
+screen_y = Window.GetY();
+screen_w = Window.GetWidth();
+screen_h = Window.GetHeight();
+
+fun full_screen(name, z) {
+    sprite = Sprite(Image(name).Scale(screen_w, screen_h));
+    sprite.SetPosition(screen_x, screen_y, z);
+    return sprite;
+}
+
+stars = full_screen("stars.png", -30);
+twinkle_far = full_screen("twinkle_far.png", -20);
+twinkle_mid = full_screen("twinkle_mid.png", -20);
+twinkle_near = full_screen("twinkle_near.png", -20);
+
+logo_size = Math.Int(Math.Min(screen_w, screen_h) * 0.55);
+# Centre on display 0 by its own geometry, so a second display of a different
+# size does not push the logo off centre.
+logo_x = Window.GetX(0) + Math.Int((Window.GetWidth(0) - logo_size) / 2);
+logo_y = Window.GetY(0) + Math.Int((Window.GetHeight(0) - logo_size) / 2);
+
+crescent = Sprite(Image("crescent.png").Scale(logo_size, logo_size));
+crescent.SetPosition(logo_x, logo_y, 10);
+crescent.SetOpacity(0);
+
+mask = Sprite(Image("mask.png").Scale(logo_size, logo_size));
+mask.SetPosition(logo_x, logo_y, 11);
+mask.SetOpacity(0);
+
+# Refresh runs about 50 times a second.
+tick = 0;
+fun refresh_callback() {
+    tick++;
+    crescent.SetOpacity(Math.Clamp(tick / 45, 0, 1));
+    mask.SetOpacity(Math.Clamp((tick - 25) / 45, 0, 1));
+    twinkle_far.SetOpacity(0.55 + 0.45 * Math.Sin(tick / 41));
+    twinkle_mid.SetOpacity(0.55 + 0.45 * Math.Sin(tick / 29 + 2.1));
+    twinkle_near.SetOpacity(0.55 + 0.45 * Math.Sin(tick / 23 + 4.2));
+}
+Plymouth.SetRefreshFunction(refresh_callback);
+
+# Boot messages, small and centred under the logo.
+message_sprite = Sprite();
+message_sprite.SetPosition(screen_x, screen_y + screen_h - 28, 20);
+fun message_callback(text) {
+    image = Image.Text(text, 0.96, 0.94, 0.96);
+    message_sprite.SetImage(image);
+    message_sprite.SetX(screen_x + Math.Int((screen_w - image.GetWidth()) / 2));
+}
+Plymouth.SetMessageFunction(message_callback);
+
+# A password prompt (only if the system ever asks for one).
+prompt_sprite = Sprite();
+prompt_sprite.SetPosition(screen_x, logo_y + logo_size + 12, 20);
+fun password_callback(prompt, bullets) {
+    stars_text = "";
+    for (i = 0; i < bullets; i++)
+        stars_text += "*";
+    image = Image.Text(prompt + "  " + stars_text, 0.96, 0.94, 0.96);
+    prompt_sprite.SetImage(image);
+    prompt_sprite.SetX(screen_x + Math.Int((screen_w - image.GetWidth()) / 2));
+}
+Plymouth.SetDisplayPasswordFunction(password_callback);
+
+fun normal_callback() {
+    prompt_sprite.SetImage(Image.Text("", 1, 1, 1));
+}
+Plymouth.SetDisplayNormalFunction(normal_callback);

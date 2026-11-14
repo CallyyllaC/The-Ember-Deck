@@ -76,6 +76,10 @@ class FakeBus:
             raise synapse.SharedMemoryLayoutError(f"{name} holds {len(stored)} items, reader needs {length}")
         return stored[:length]
 
+    def try_get_bytes(self, name: str, length: int):
+        stored = self.try_get_array(name, length, "u8")
+        return None if stored is None else bytes(stored)
+
     def set_array(self, name: str, values, dtype: str = "f32") -> None:
         items = [float(v) for v in values] if dtype == "f32" else [int(v) for v in values]
         previous = self.values.get(name)

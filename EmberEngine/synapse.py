@@ -184,6 +184,19 @@ def try_get_array(name: str, length: int, dtype: str = "f32"):
     return list(struct.unpack_from(fmt, h.buf, 0))
 
 
+def try_get_bytes(name: str, length: int):
+    """Return the first ``length`` raw bytes, or None if the segment does not exist yet.
+
+    For large u8 payloads such as the panel's album cover: unlike
+    ``try_get_array(..., "u8")`` it does not build a Python list.
+    """
+    try:
+        h = _get_handle(name, length, create=False)
+    except FileNotFoundError:
+        return None
+    return bytes(h.buf[:length])
+
+
 def set_array(name: str, values, dtype: str = "f32") -> None:
     """Write a fixed-size array; the first writer defines the segment size."""
     if dtype == "f32":
